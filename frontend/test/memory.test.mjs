@@ -310,8 +310,9 @@ test('index.html: the memory panel sits outside the propose form and the toggle 
     '<script src="./vendor/ScrollTrigger-3.15.1.min.js" defer>',
     '<script type="module" src="./interactions.js">',
   ];
-  assert.deepEqual(scripts, ['<script type="module" src="./app.js">', ...presentation], 'only app.js plus the presentation layer is loaded up front');
-  assert.doesNotMatch(src('interactions.js'), /memory|walrus|import\s/i, 'the presentation layer does not load memory code');
+  assert.deepEqual(scripts, ['<script src="./theme.js">', '<script type="module" src="./app.js">', ...presentation], 'only app.js plus the presentation layer is loaded up front');
+  // theme.js (colour theme switch) is presentation too.
+  for (const f of ['interactions.js', 'theme.js']) assert.doesNotMatch(src(f), /memory|walrus|import\s/i, `${f} (presentation layer) does not load memory code`);
 });
 
 test('no keys or tokens in memory files', () => {

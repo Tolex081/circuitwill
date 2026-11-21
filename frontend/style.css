@@ -13,18 +13,20 @@
 @font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('./vendor/fonts/ibm-plex-mono-400.woff2') format('woff2'); }
 @font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('./vendor/fonts/ibm-plex-mono-500.woff2') format('woff2'); }
 
+/* Two themes. Dark is the default; theme.js sets <html data-theme="light"> when the visitor picks light. */
 :root {
-  --paper: #f3f1ec;
-  --paper-2: #eae7e0;
-  --ink: #1c2421;
-  --muted: #5c6560;
-  --rule: #d5d0c6;
-  --rule-strong: #857f72; /* form-control lines: ≥3:1 on paper (WCAG 1.4.11) */
-  --accent: #2e5266;
-  --accent-ink: #f3f1ec;
-  --allow: #2f6a43;
-  --block: #a3402c;
-  --warn: #855f12;
+  color-scheme: dark;
+  --paper: #151918;
+  --paper-2: #1c2120;
+  --ink: #e6e2da;
+  --muted: #9ba29d;
+  --rule: #2b3230;
+  --rule-strong: #6b7470; /* form-control lines: ≥3:1 on paper (WCAG 1.4.11) */
+  --accent: #9cbfd0;
+  --accent-ink: #12191c;
+  --allow: #86c49a;
+  --block: #ec917c;
+  --warn: #dcb76a;
   --info: var(--accent);
 
   --serif: 'Newsreader', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
@@ -48,20 +50,19 @@
   --i-block: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M5.7 5.7l12.6 12.6'/%3E%3C/svg%3E");
   --i-memory: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9' stroke-dasharray='3 3'/%3E%3Cpath d='M12 8v4l2.5 2.5'/%3E%3C/svg%3E");
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #151918;
-    --paper-2: #1c2120;
-    --ink: #e6e2da;
-    --muted: #9ba29d;
-    --rule: #2b3230;
-    --rule-strong: #6b7470;
-    --accent: #9cbfd0;
-    --accent-ink: #12191c;
-    --allow: #86c49a;
-    --block: #ec917c;
-    --warn: #dcb76a;
-  }
+:root[data-theme='light'] {
+  color-scheme: light;
+  --paper: #f3f1ec;
+  --paper-2: #eae7e0;
+  --ink: #1c2421;
+  --muted: #5c6560;
+  --rule: #d5d0c6;
+  --rule-strong: #857f72;
+  --accent: #2e5266;
+  --accent-ink: #f3f1ec;
+  --allow: #2f6a43;
+  --block: #a3402c;
+  --warn: #855f12;
 }
 @media (max-width: 640px) { :root { --gutter: 16px; } }
 
@@ -408,3 +409,18 @@ details.sub[open] > summary { margin-bottom: 16px; }
   .btn.big, .grid-form .btn:not(.ghost), #create-form > .btn { width: 100%; }
   .row-actions .btn:not(.ghost) { flex: 1; }
 }
+
+/* Theme switch (theme.js): one icon button. It shows the theme it switches to: a sun in dark, a moon in light.
+   Hidden until the script runs, so a page without JS never shows a dead button. */
+.theme-btn {
+  display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0; flex: none;
+  border: 1px solid var(--rule); border-radius: 50%; background: transparent; color: var(--ink); cursor: pointer;
+  transition: color 0.25s var(--ease), border-color 0.25s var(--ease), background-color 0.25s var(--ease);
+}
+.theme-btn:hover { color: var(--accent); border-color: var(--accent); }
+.theme-btn:active { background: var(--paper-2); }
+.theme-btn[hidden] { display: none; }
+.theme-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.theme-btn .i-moon, :root[data-theme='light'] .theme-btn .i-sun { display: none; }
+:root[data-theme='light'] .theme-btn .i-moon { display: block; }
+@media (prefers-reduced-motion: reduce) { .theme-btn { transition: none; } }
