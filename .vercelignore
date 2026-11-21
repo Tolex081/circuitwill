@@ -1,0 +1,13 @@
+# Vercel serves only the static dashboard and the offline NAND simulator it imports
+# (frontend/lib/reeval.js loads ../../circuits/lib/tap02.mjs). Everything else stays out of the deployment.
+/*
+!/vercel.json
+!/frontend
+!/circuits
+/circuits/*
+!/circuits/lib
+# developer-only files: local-config.json turns on anvil dev mode
+/frontend/local-config.json
+/frontend/serve.mjs
+/frontend/scripts
+/frontend/test

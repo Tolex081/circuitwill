@@ -1,0 +1,15 @@
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/broadcast-rehearsal/
+contracts/cache-rehearsal/
+contracts/out-rehearsal/
+contracts/broadcast-dryrun/
+contracts/cache-dryrun/
+contracts/out-dryrun/
+frontend/local-config.json
+node_modules/
+.env
+*.local
+.vercel/
+.impeccable/config.local.json

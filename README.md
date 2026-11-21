@@ -1,0 +1,585 @@
+# CircuitWill
+
+A personal money will made of TapeOut circuits on X Layer. Your rules decide whether money can move. An agent can
+propose payments, but only the circuits can allow them.
+
+**Status: Phase 5, mainnet deployment prepared, not executed.** The step-by-step X Layer mainnet runbook, with
+cost estimate and a passing dry run on a fork of the latest block, is
+[`docs/MAINNET_RUNBOOK.md`](docs/MAINNET_RUNBOOK.md); you broadcast it from your own keystore. It contains the escrow contract, all four MVP rule circuits (Daily Cap, Payee
+Whitelist + Cooling-off, Confirmation Threshold, Freeze), tests (local, plus an optional run against a fork of
+X Layer mainnet) and a static dashboard (`frontend/`, see [Frontend](#frontend-dashboard)) that has run only
+against a local anvil fork. **Nothing has been deployed, verified on an explorer, or taped out on a live network,
+and the dashboard is not hosted anywhere.** The optional [Walrus Memory](#walrus-memory-optional-off-by-default)
+suggestions are off by default, outside the payment path, and in the browser run on a clearly labelled local stub:
+**nothing is connected to Walrus.**
+
+Specifications: `CircuitWill_PRD.md.md`, `CircuitWill_Claude_Handoff.md.md`, `CircuitWill_Circuit_Pinouts.md..md`,
+`CircuitWill_Risk_Matrix.md.md`, `CircuitWill_UI_Wireframes.md.md`.
+TapeOut interface evidence and gaps: [`docs/TAPEOUT_INTERFACE.md`](docs/TAPEOUT_INTERFACE.md).
+
+## Layout
+
+```
+circuits/                         Node (no dependencies): netlist generators + reference simulator
+  lib/tap02.mjs                   TAP-02 NAND encoding and LSB-first evaluator
+  lib/gates.mjs                   shared comparator, LSB-first field packing, artifact writer
+  daily-cap/build.mjs             Daily Cap (447 NAND)
+  payee-whitelist/build.mjs       Payee Whitelist + Cooling-off (237 NAND)
+  confirmation/build.mjs          Confirmation Threshold (160 NAND)
+  freeze/build.mjs                Freeze (1 NAND)
+  <name>/build/                   generated netlist (.hex) and metadata (.json), committed
+  test/*.test.mjs                 edge values, bit sweeps, exhaustive small widths, 20k random vectors per circuit
+contracts/                        Foundry
+  src/CircuitWillEscrow.sol       escrow: circuit-gated payments and withdrawals, rule parameters, decision log
+  src/CircuitWillKey.sol          non-burnable ERC-721 controller NFT
+  src/interfaces/ITapeOut.sol     TapeOut functions used (eval, circuitInfo, netlist, isCPU)
+  src/libraries/TapeOutEval.sol   fail-closed eval adapter (the only code that calls TapeOut eval)
+  src/libraries/*Packing.sol      one input packer per circuit, with range checks (reject, never truncate)
+  test/                           unit, per-circuit and multi-circuit tests; mocks (NAND-interpreting TapeOut double,
+                                  hostile processors)
+  test/fork/TapeOutFork.t.sol     optional: real TapeOut + real USDT0 on a local X Layer fork
+  script/                         TapeOutCircuit.s.sol, TapeOutDailyCap.s.sol, Deploy.s.sol (not run on a live network),
+                                  rehearse-anvil.ps1 (local anvil rehearsal of both),
+                                  dryrun-anvil.ps1 (the mainnet runbook replayed on a local fork of the latest block)
+frontend/                         static dashboard, no build step (see "Frontend dashboard")
+  index.html, app.js, style.css   the page: connect, create/open, rules, payments, decisions, re-evaluation
+  lib/reeval.js                   read-only re-evaluation of a decision (shared by the page and the CLI)
+  lib/units.js, lib/meta.js       USDT0 parsing with uint32/uint16 limits, input decoding, enum labels
+  lib/memory-pref.js              Walrus Memory on/off flag per wallet (localStorage, default off)
+  lib/memory.js                   optional advisory memory hints: stub + SDK adapters, panel (loaded only when on)
+  artifacts.js                    ABI + bytecode of CircuitWillEscrow / CircuitWillKey, generated from contracts/out
+  vendor/ethers-6.13.4.min.js     ethers v6 (MIT), vendored so the page has no CDN dependency
+  serve.mjs                       local static server (127.0.0.1:5173)
+  scripts/                        setup-anvil.ps1, build-artifacts.mjs, reevaluate.mjs (CLI), memory-suggest.mjs (agent side)
+  test/units.test.mjs             parsing, limits, input decoding, reason priority
+  test/memory.test.mjs            memory off by default, adapters, checks that memory cannot reach a contract call
+docs/TAPEOUT_INTERFACE.md         what is verified about TapeOut/X Layer and what is not
+docs/MAINNET_RUNBOOK.md           X Layer mainnet deployment: commands, cost estimate, dry run, verification, DeWEB
+```
+
+## Setup
+
+Requirements: Node ≥ 20, [Foundry](https://getfoundry.sh) (tested with forge 1.9.0). Dependencies (forge-std
+v1.9.4, OpenZeppelin Contracts v5.1.0) are vendored in `contracts/lib`.
+
+```powershell
+cd circuits; npm run build; npm test
+```
+
+```powershell
+cd contracts; forge build; forge test; forge fmt --check
+```
+
+Optional fork run. It reads mainnet state, simulates locally, and broadcasts nothing:
+
+```powershell
+cd contracts; $env:XLAYER_FORK_RPC = "https://rpc.xlayer.tech"; forge test --match-path test/fork/TapeOutFork.t.sol -vv
+```
+
+Set `XLAYER_FORK_BLOCK` to pin a block. Without `XLAYER_FORK_RPC`, the fork tests are skipped.
+
+The contract tests read `circuits/<name>/build/<name>.netlist.hex`, so the generators, the Solidity tests, the fork
+test and the tapeout scripts all use the same artifacts. A circuit test fails if a committed artifact drifts from its
+generator. The packing libraries are checked against shared byte vectors that the Node tests also assert, and fuzzed
+against an independent bit-by-bit packer in `test/Base.t.sol`.
+
+## How it works
+
+```
+proposePayment(to, amount, memo)  (controller NFT owner or active agent)
+withdraw(to, amount)              (controller NFT owner only)
+        │
+        ▼
+_execute: assign decisionId → reset spentToday if the UTC day changed
+        → for every attached circuit: pack inputs from on-chain state → TapeOut eval (fail-closed)
+        → all ALLOW and balance OK → transfer → spentToday += amount → consume the confirmation, if one was used
+        → record decisionRecordHash, emit CircuitEvaluated×n, Decision, PaymentAllowed | PaymentBlocked
+          (+ ConfirmationConsumed)
+        → return (decisionId, allowed)   — the only revert after evaluation starts is InsufficientGas
+```
+
+- **Control follows the NFT.** The escrow stores `controllerNft` and `controllerTokenId` and never holds the NFT.
+  Management and `withdraw` require `controllerNft.ownerOf(controllerTokenId) == msg.sender`. When the NFT moves to a
+  new wallet, the new holder takes control and the old one loses it.
+- **Agent key.** `setAgent` records who appointed the agent (`agentSetBy`). The agent is active only while that
+  address still owns the NFT, so an NFT transfer disables the previous owner's agent. The agent can only call
+  `proposePayment`.
+- **No bypass.** `withdraw` uses the same evaluation path as a payment: every attached circuit (whitelist,
+  confirmation and freeze included) applies, it counts toward `spentToday`, and it is blocked like any payment. If no
+  circuits are attached, everything is blocked (`NO_CIRCUITS`).
+- **Fail closed.** Each of these becomes a recorded blocked decision: an eval revert, a circuit that uses up its
+  whole per-eval gas budget (`evalGasLimit`, default 3M), missing code, malformed or oversized return data,
+  out-of-range inputs, insufficient balance, or a failed token transfer. All attached circuits are evaluated and logged
+  even after one denies.
+- **Gas budget.** Each eval is forwarded `min(evalGasLimit, gasleft() - GAS_RESERVE)`; `GAS_RESERVE` = 250k is held
+  back so recording still fits. If an eval fails after using (nearly) all of the gas it was given, and that was less
+  than its budget because the caller sent too little gas, the whole call reverts with `InsufficientGas(index)` and
+  nothing is recorded. "Nearly" means at least 15/16 of it: TapeOut circuits contracts are beacon proxies, and each
+  proxy hop keeps back 1/64 of the gas when the call below it runs out (EIP-150). An underfunded call therefore
+  never turns into a blocked decision, and `eth_estimateGas` (which looks for the lowest limit that does not revert)
+  returns a limit at which every circuit gets the gas it needs.
+- **Daily spend.** `day = uint32(block.timestamp / 86400)`. When `day != lastResetDay`, `spentToday` is reset to 0
+  before inputs are packed. It increases only after a successful transfer.
+- **Range.** Amounts, the cap, the trial limit and the threshold are `uint32` in token base units (with 6-decimal
+  USDT0, at most 4,294.967295 USDT0). Hours are `uint16`. Setters above the width revert (`ValueOutOfRange`). A
+  proposal amount above `2^32-1` makes every amount-reading circuit `NOT_EVALUATED` and the decision blocked
+  (`INPUT_OUT_OF_RANGE`). Values are never truncated.
+- **Reverts** (nothing is recorded): caller not authorized, `to == 0`, `amount == 0`, memo longer than 256 bytes,
+  and `InsufficientGas` (see "Gas budget").
+
+### Management functions (controller only)
+
+| Function | Effect |
+|---|---|
+| `attachCircuit(kind, processor, circuitId)` / `detachCircuit(index)` | At most one circuit per kind, up to 4. `attachCircuit` checks `isCPU`, and that `circuitInfo` matches the kind's pinout (nIn 96 / 97 / 65 / 1, nOut 1, nState 0), and records `keccak256(netlist)` |
+| `setDailyCap(uint256)` | Daily Cap parameter, ≤ `2^32-1` |
+| `setPayee(address, bool saved)` / `removePayee(address)` | Payee list. The first `setPayee` records `firstSeen = block.timestamp`; later calls only change `saved`. Removing and re-adding restarts the cooling-off |
+| `setTrialLimit(uint256)` | Largest payment to a payee that is not saved, ≤ `2^32-1` |
+| `setCoolingOffHours(uint256)` | Hours a payee that is not saved must be known before it can be paid, ≤ 65535 |
+| `setConfirmationThreshold(uint256)` | Payments above it need a confirmation, ≤ `2^32-1` |
+| `confirmPayment(bytes32 paymentHash)` / `revokeConfirmation(bytes32)` | Confirm (or withdraw the confirmation of) one exact payment, see below |
+| `setFrozen(bool)` | Freeze flag. Freezing requires an attached Freeze circuit (`FreezeCircuitNotAttached`), because the flag has no effect without one; unfreezing is always possible |
+| `setAgent(address)` | Agent key (or `address(0)` to clear) |
+| `setEvalGasLimit(uint256)` | Gas budget per eval, 100,000 to 30,000,000 (default 3,000,000). A circuit that uses it all is recorded as REVERTED |
+
+Defaults after deployment are all zero: trial limit 0 (with the whitelist attached, only saved payees can be paid),
+threshold 0 (with the confirmation circuit attached, every payment needs a confirmation), not frozen.
+
+**Parameter-change timing.** Every parameter and the circuit list are read when `proposePayment` / `withdraw`
+executes. There is no snapshot at proposal time and no timelock: a change applies to the very next decision,
+including one later in the same block. Every change emits an event (`DailyCapSet`, `PayeeSet`, `PayeeRemoved`,
+`TrialLimitSet`, `CoolingOffHoursSet`, `ConfirmationThresholdSet`, `PaymentConfirmed`, `ConfirmationRevoked`,
+`FrozenSet`, `AgentSet`, `EvalGasLimitSet`, `CircuitAttached`, `CircuitDetached`). A decision's `CircuitEvaluated` inputs show exactly
+which values were in force for it.
+
+### Payment confirmations
+
+```
+paymentHash = keccak256(abi.encode(
+    keccak256("CircuitWill.Payment(uint256 chainId,address escrow,address to,uint256 amount,uint256 nonce)"),
+    block.chainid, escrow, to, amount, paymentNonce[to]))
+```
+
+- Get it with `currentPaymentHash(to, amount)` (or `hashPayment(to, amount, nonce)`), then call
+  `confirmPayment(paymentHash)` as the current NFT owner.
+- At execution, the escrow recomputes the hash from the proposal's `to`, `amount` and the recipient's current nonce.
+  The circuit gets `confirmed = 1` only if that exact hash was confirmed, has not expired, and was confirmed by the
+  wallet that owns the NFT now (a previous owner's confirmations stop counting after a transfer).
+- **Expiry:** usable while `block.timestamp <= confirmedAt + CONFIRMATION_TTL` (1 hour). Confirming again refreshes it.
+- **One-time:** when a transfer that was packed with `confirmed = 1` succeeds, the confirmation is deleted, the
+  recipient's `paymentNonce` increases (so the same hash can never match again), and `ConfirmationConsumed` is
+  emitted. A blocked attempt (another circuit denied, balance, transfer failure) does not consume it; the exact same
+  payment can be retried until expiry and still executes at most once.
+- A different recipient, amount, nonce, chain or escrow gives a different hash, so a confirmation cannot be used for
+  any other payment. It applies to `withdraw` too (same recipient and amount).
+- The confirmation is consumed whenever it is used, even if the amount was at or below the threshold.
+
+### Daily Cap circuit
+
+nIn = 96, nOut = 1, 447 NAND. Output bit 0 is `1` if `spent_today + amount <= daily_cap`.
+
+| Bytes | Pins | Value (little-endian) |
+|---|---|---|
+| 0–3 | 0–31 | amount (uint32) |
+| 4–7 | 32–63 | spent_today (uint32) |
+| 8–11 | 64–95 | daily_cap (uint32) |
+
+The netlist is a ripple-carry adder, an LSB→MSB comparator, and `AND NOT carry32`: the 33-bit sum is checked, so it
+never wraps. The pinout document targets fewer than 150 gates, which is not achievable for a 32-bit add-and-compare
+built from 2-input NANDs.
+
+### Payee Whitelist + Cooling-off circuit
+
+nIn = 97, nOut = 1, 237 NAND. Output bit 0 is `is_saved OR (amount <= trial_limit AND age_hours >= cooling_off_hours)`.
+
+| Pins | Value |
+|---|---|
+| 0 | is_saved |
+| 1–16 | age_hours (uint16) |
+| 17–48 | amount (uint32) |
+| 49–80 | trial_limit (uint32) |
+| 81–96 | cooling_off_hours (uint16) |
+
+The 13 input bytes are the little-endian encoding of the 97-bit word
+`is_saved | age_hours<<1 | amount<<17 | trial_limit<<49 | cooling_off_hours<<81` (fields are not byte-aligned).
+The escrow computes `age_hours = (block.timestamp - firstSeen) / 3600` for a payee added with `setPayee`, and 0 for an
+unknown payee (treated as first seen now). Age saturates at 65535 hours (about 7.5 years); because
+`cooling_off_hours <= 65535`, the comparison gives the same result as the true age. The netlist is two unsigned
+comparators (2 + 5 per further bit) and 3 combining gates. The pinout document targets fewer than 200 gates; this
+construction needs 237.
+
+### Confirmation Threshold circuit
+
+nIn = 65, nOut = 1, 160 NAND. Output bit 0 is `amount <= threshold OR confirmed`.
+
+| Bytes | Pins | Value |
+|---|---|---|
+| 0–3 | 0–31 | amount (uint32, little-endian) |
+| 4–7 | 32–63 | threshold (uint32, little-endian) |
+| 8 | 64 | confirmed (`0x00` or `0x01`) |
+
+One 32-bit comparator plus 3 gates. The pinout document targets fewer than 100 gates; this construction needs 160.
+
+### Freeze circuit
+
+nIn = 1, nOut = 1, 1 NAND: `allow = NAND(freeze_flag, freeze_flag)`. Input is one byte, `0x00` (allow) or `0x01`
+(block). It is combinational: the escrow stores the flag, so no LATCH or `step` is used.
+
+## Event and re-evaluation format
+
+Each decision emits, in order: one `CircuitEvaluated` per attached circuit, then `Decision`, then `PaymentAllowed`
+or `PaymentBlocked`, then `ConfirmationConsumed` if an allowed transfer used a confirmation. Enums are encoded as
+`uint8` in the ABI.
+
+```solidity
+event CircuitEvaluated(uint256 indexed decisionId, uint256 indexed index, uint8 kind, address processor,
+                       uint256 circuitId, bytes32 netlistHash, bytes input, uint8 status, bytes output);
+event Decision(uint256 indexed decisionId, uint8 indexed action, bool indexed allowed, address proposer, address to,
+               uint256 amount, uint32 day, uint256 spentTodayBefore, uint256 spentTodayAfter, uint8 reason,
+               string memo, bytes32 recordHash);
+event PaymentAllowed(uint256 indexed decisionId, uint8 indexed action, address indexed to, uint256 amount);
+event PaymentBlocked(uint256 indexed decisionId, uint8 indexed action, address indexed to, uint256 amount, uint8 reason);
+event ConfirmationConsumed(uint256 indexed decisionId, bytes32 indexed paymentHash, address indexed to, uint256 amount,
+                           uint256 nonce);
+```
+
+The Phase 1 event signatures are unchanged. New `kind` values were appended; existing values were not renumbered.
+
+| Enum | Values |
+|---|---|
+| `kind` | 0 NONE, 1 DAILY_CAP, 2 WHITELIST, 3 CONFIRMATION, 4 FREEZE |
+| `action` | 0 PAYMENT, 1 WITHDRAWAL |
+| `status` | 0 NOT_EVALUATED (inputs out of range), 1 ALLOW, 2 DENY, 3 REVERTED (incl. out of gas), 4 MALFORMED_OUTPUT |
+| `reason` | 0 NONE (allowed), 1 CIRCUIT_DENIED, 2 EVAL_FAILED, 3 INPUT_OUT_OF_RANGE, 4 NO_CIRCUITS, 5 INSUFFICIENT_BALANCE, 6 TRANSFER_FAILED |
+
+When several circuits fail, `reason` follows a fixed priority: INPUT_OUT_OF_RANGE > EVAL_FAILED > CIRCUIT_DENIED.
+
+`input` is exactly the byte string passed to `processor.eval(circuitId, input)`. `netlistHash` is
+`keccak256(processor.netlist(circuitId))`, taken when the circuit was attached.
+
+**On-chain commitment.** `decisionRecordHash(decisionId)` stores:
+
+```
+circuitsHash = 0x00…00
+for each CircuitEvaluated in index order:
+  circuitsHash = keccak256(abi.encode(circuitsHash, kind, processor, circuitId, netlistHash,
+                                      keccak256(input), status, keccak256(output)))
+recordHash = keccak256(abi.encode(escrow, chainId, decisionId, action, proposer, to, amount, day,
+                                  spentTodayBefore, allowed, reason, keccak256(bytes(memo)), circuitsHash))
+```
+
+**To re-evaluate a decision** (anyone, read-only):
+
+1. Get the transaction's logs, for example with `cast receipt <txHash> --rpc-url https://rpc.xlayer.tech`.
+2. Decode each `CircuitEvaluated` data:
+   `cast abi-decode --input "f(uint8,address,uint256,bytes32,bytes,uint8,bytes)" <data>`.
+3. Re-run each circuit on its recorded input:
+   `cast call <processor> "eval(uint256,bytes)(bytes)" <circuitId> <input> --rpc-url https://rpc.xlayer.tech`.
+   The result must equal `output`, and bit 0 decides allow or deny. The decision is allowed only if every circuit
+   returned 1 (and then balance and transfer succeeded, see `reason`).
+4. Check that each circuit is unchanged:
+   `cast keccak $(cast call <processor> "netlist(uint256)(bytes)" <circuitId> --rpc-url …)` must equal `netlistHash`.
+   You can also simulate the netlists offline with `circuits/lib/tap02.mjs`.
+5. Check that the inputs match the summary (`Decision.amount`, `spentTodayBefore`):
+   - Daily Cap: bytes 0–3 = `amount`, bytes 4–7 = `spentTodayBefore`, bytes 8–11 = the cap in force.
+   - Payee Whitelist: read the 13 bytes as a little-endian integer `w`; `(w >> 17) & 0xffffffff` = `amount`.
+     `w & 1` is is_saved, `(w >> 1) & 0xffff` age_hours, `(w >> 49) & 0xffffffff` trial_limit,
+     `(w >> 81) & 0xffff` cooling_off_hours. `PayeeSet` events give the payee's `firstSeen`.
+   - Confirmation: bytes 0–3 = `amount`, bytes 4–7 = the threshold in force, byte 8 = confirmed. A confirmed `1`
+     is backed by a `PaymentConfirmed` event for `hashPayment(to, amount, nonce)` within the last hour, and by a
+     `ConfirmationConsumed` event when the payment went through.
+   - Freeze: `0x01` means frozen; it matches the last `FrozenSet` event before the decision.
+6. Recompute `recordHash` from the event fields and compare it with `decisionRecordHash(decisionId)` on the escrow.
+
+`test_thirdPartyCanReEvaluateFromEvents` (one circuit) and `test_thirdPartyReEvaluatesMultiCircuitDecisions` (four
+circuits, five decisions, parameters changed afterwards) perform these steps from recorded logs. The dashboard's
+**Re-evaluate** button and `node frontend/scripts/reevaluate.mjs <txHash> [rpc]` perform all six steps from a
+transaction hash (see [Frontend](#frontend-dashboard)).
+
+## Deployment configuration (not yet done)
+
+**To deploy, follow [`docs/MAINNET_RUNBOOK.md`](docs/MAINNET_RUNBOOK.md).** It gives the exact PowerShell
+commands with a Foundry keystore (`--account`), says where `--broadcast` and `--verify` go, and estimates the cost
+from live fee reads: ≈ 0.0055 OKB (of which 0.0052 OKB is the four tapeout fees), 0.11 BEM, and 60 USDT0 for the
+demo, none of which is a fee. It also records the dry run of 2026-11-20 on a fork of block 76,403,789, which passed
+with no TapeOut drift, and what is known about DeWEB hosting. The table below summarizes the configuration.
+
+Nothing below has been executed on a live network. You need:
+
+| Item | Value / how to get it |
+|---|---|
+| Network | X Layer mainnet, chain 196, RPC `https://rpc.xlayer.tech` |
+| Token | USDT0 `0x779Ded0c9e1022225f8E0630b35a9b54bE713736` (6 decimals) |
+| TapeOut factory | `0x1f09DAeFA827f02CBb40967cc91b259763760761` (for the `isCPU` check; `0x0` disables it) |
+| TapeOut CPU (processor) | **Missing.** A circuits contract to tape out on. Your own CPU costs 0.1 BEM `deployFee` (observed); all four circuits need 845 NAND transistors (447 + 237 + 160 + 1) of that CPU |
+| Circuit ids | **Missing.** One per circuit from `script/TapeOutCircuit.s.sol` (`CIRCUIT=daily-cap`, `payee-whitelist`, `confirmation`, `freeze`); each tapeout costs 0.0013 OKB `TAPEOUT_FEE` (observed on a fork) |
+| Controller NFT | **Decided: `CircuitWillKey`** (non-burnable, non-upgradeable). `Deploy.s.sol` deploys one, or reuses `CIRCUITWILL_KEY`, and mints a fresh id per escrow. TapeOut circuit NFTs are not used as controllers: a circuit can be shared by many escrows, and its contract is owner-upgradeable |
+| Daily cap | `DAILY_CAP`, base units, ≤ 4294967295 (for example `50000000` = 50 USDT0) |
+| Whitelist | `WHITELIST_CIRCUIT_ID`, `TRIAL_LIMIT` (base units), `COOLING_OFF_HOURS`, `SAVED_PAYEES` (comma-separated). Save the controller's own wallet too, or withdrawals to it are treated as a new payee |
+| Confirmation | `CONFIRMATION_CIRCUIT_ID`, `CONFIRMATION_THRESHOLD` (base units) |
+| Freeze | `FREEZE_CIRCUIT_ID` |
+| Agent key | `AGENT`, optional address |
+| Deployer | A keystore account funded with OKB for gas (`--account`). Never put keys in files |
+
+```powershell
+cd contracts; $env:TAPEOUT_CIRCUITS = "<circuits address>"; $env:CIRCUIT = "payee-whitelist"; forge script script/TapeOutCircuit.s.sol --rpc-url xlayer --account <keystore>
+```
+
+```powershell
+cd contracts; $env:TAPEOUT_CIRCUITS = "<circuits address>"; $env:DAILY_CAP_CIRCUIT_ID = "<id>"; $env:DAILY_CAP = "50000000"; $env:WHITELIST_CIRCUIT_ID = "<id>"; $env:TRIAL_LIMIT = "5000000"; $env:COOLING_OFF_HOURS = "24"; $env:SAVED_PAYEES = "<addr1>,<addr2>"; $env:CONFIRMATION_CIRCUIT_ID = "<id>"; $env:CONFIRMATION_THRESHOLD = "20000000"; $env:FREEZE_CIRCUIT_ID = "<id>"; forge script script/Deploy.s.sol --rpc-url xlayer --account <keystore>
+```
+
+Both commands only simulate. Add `--broadcast` (and `--verify` with explorer settings) only when you intend to spend
+real funds. `Deploy.s.sol` sets each circuit's parameters before attaching it.
+
+**Rehearsal on a local anvil fork.** `script/rehearse-anvil.ps1` runs the real scripts against a local anvil node:
+it creates a CPU, mints NAND, runs `TapeOutCircuit.s.sol` for all four circuits, runs `Deploy.s.sol`, checks the
+configuration, then makes an allowed payment, a blocked unconfirmed payment, a confirmed payment and a frozen
+withdrawal with real USDT0 logic. It refuses any RPC other than `127.0.0.1`/`localhost`, impersonates accounts (no
+keys), and writes to `broadcast-rehearsal/`, `cache-rehearsal/` and `out-rehearsal/` so nothing looks like a real
+chain-196 deployment record.
+
+```powershell
+anvil --fork-url https://rpc.xlayer.tech --fork-block-number 76350000 --retries 20 --fork-retry-backoff 1500 --compute-units-per-second 50
+```
+
+```powershell
+cd contracts; powershell -ExecutionPolicy Bypass -File script/rehearse-anvil.ps1
+```
+
+Status (2026-11-20, rerun after the gas-budget change): the full rehearsal passed on anvil forked at block
+76,350,000, with every escrow call sent at the gas limit `cast` estimated (no explicit limit). Estimates were 2.44M to
+2.46M for the four `proposePayment` / `withdraw` calls, each using 2.23M to 2.32M. All 25 checks passed:
+CPU and 845 NAND, four tapeouts, `Deploy.s.sol` with all four circuits and their parameters, an allowed 10 USDT0
+payment, a blocked unconfirmed 30, a confirmed 30 (confirmation consumed), a frozen withdrawal, and four recorded
+decisions. Anvil fetches fork state lazily from the public RPC; earlier attempts failed on connection resets and DNS
+errors, so expect retries on a flaky connection. The script retries read-only calls, and retries a transaction only
+when the sender's nonce did not move and anvil's pool is empty.
+
+**Gas** (fork measurements, real TapeOut, fork at block 76,350,000): eval ≈ 1.07M (Daily Cap), 0.59M (Whitelist),
+0.41M (Confirmation), 0.03M (Freeze), including call overhead. With all four attached, an allowed `proposePayment`
+that consumes a confirmation used ≈ 2.32M gas and a blocked `withdraw` ≈ 2.23M. Fund the escrow with a plain USDT0
+`transfer` to its address.
+
+**Gas estimation works.** Wallets, agents and `cast send` can rely on `eth_estimateGas` for `proposePayment` and
+`withdraw`. A limit too low for any circuit reverts with `InsufficientGas` instead of being recorded as a blocked
+decision, so the estimate is the lowest limit at which every circuit is evaluated in full: ≈ 2.43M for a 10 USDT0
+payment with all four circuits on the fork (`test_fork_estimatedGasIsEnoughWithFourCircuits`; just below it the call
+reverts with `InsufficientGas`). Before this change the escrow recorded a starved eval as a blocked decision: an
+estimated 2.31M limit on the anvil rehearsal blocked a payment (Confirmation and Freeze REVERTED) that 4M gas allowed.
+
+## Frontend dashboard
+
+`frontend/` is a static page with no build step and no runtime dependencies (ethers 6.13.4 is vendored). It is not
+hosted anywhere yet, and it has only run against a local anvil fork.
+
+| Card | What it does |
+|---|---|
+| Connect | A browser wallet (EIP-1193, switched to chain 196), or on a local anvil node only, an impersonated address (`anvil_impersonateAccount`; no key). Without a wallet the page is read-only: `?escrow=<address>&from=<block>` opens any will |
+| Create | Deploys `CircuitWillKey` (or reuses one), mints the controller NFT to your wallet, deploys `CircuitWillEscrow`, sets each circuit's parameters, then attaches it (same order as `Deploy.s.sol`), then sets the agent. One transaction per step |
+| This CircuitWill / Balance | Escrow, controller NFT and its owner, agent (active or not), USDT0 balance, spent today (`currentSpentToday`) against the cap, frozen. **Fund** is a plain USDT0 `transfer` |
+| Propose payment | `proposePayment(to, amount, memo)` for the controller or the active agent; **Withdraw** for the controller. The result banner shows the recorded `Decision` and each circuit's status |
+| Active rules / Edit rules | Attached circuits with the parameters in force, attach/detach, daily cap, trial limit, cooling-off, confirmation threshold, agent, `evalGasLimit`, freeze/unfreeze, payees (add, save/unsave, remove) and `confirmPayment` / `revokeConfirmation` for one exact `(to, amount)` |
+| Recent decisions | `Decision` + `CircuitEvaluated` logs of the escrow (from the `from` block, or the last 10,000 blocks), with the packed inputs decoded per circuit and a **Re-evaluate** button |
+| Re-evaluate any decision | Same check from a transaction hash, for decisions of any escrow |
+
+Rules the page follows:
+
+- **It never decides.** Allowed/blocked comes only from the escrow's `Decision` event, always labelled "circuit
+  decision · final". There is no preview, override, retry-until-allowed or memory input. Optional Walrus Memory
+  hints are display-only text beside the form (see [Walrus Memory](#walrus-memory-optional-off-by-default)).
+- **Gas from `eth_estimateGas`.** Every transaction is sent with the estimate + 10%. Because an underfunded eval
+  reverts with `InsufficientGas` instead of being recorded, the estimate is enough for every circuit; extra gas
+  cannot change an outcome (each eval is capped at `evalGasLimit`). A revert is shown with its decoded error name.
+- **Limits enforced before sending.** USDT0 amounts are parsed as exact 6-decimal values (no floating point) and
+  rejected above 4,294.967295 USDT0 (`2^32-1` base units). Cooling-off ≤ 65535 h, `evalGasLimit` 100,000 to
+  30,000,000, memo ≤ 256 UTF-8 bytes.
+- **Re-evaluation is read-only.** From the transaction receipt it re-runs TapeOut `eval` on each recorded input and
+  compares the output, checks `keccak256(netlist)` against `netlistHash`, simulates the fetched netlist offline with
+  `circuits/lib/tap02.mjs`, checks the packed amount / `spentToday` against the `Decision`, checks that `reason`,
+  `allowed` and `spentTodayAfter` follow from the circuit statuses, and recomputes `recordHash` (compared with the
+  event and with `decisionRecordHash(decisionId)`). REVERTED or MALFORMED_OUTPUT circuits are reported as not
+  replayable. A mismatch is reported; nothing is written.
+
+**Run it against a local anvil fork** (three terminals, from the repository root):
+
+```powershell
+anvil --fork-url https://rpc.xlayer.tech --fork-block-number 76350000 --retries 20 --fork-retry-backoff 1500 --compute-units-per-second 50
+```
+
+```powershell
+cd frontend; powershell -ExecutionPolicy Bypass -File scripts/setup-anvil.ps1
+```
+
+```powershell
+node frontend/serve.mjs
+```
+
+`setup-anvil.ps1` refuses any RPC that is not `127.0.0.1`/`localhost` and a chain other than 196. It creates a TapeOut
+CPU, mints 845 NAND, tapes out the four circuits with `script/TapeOutCircuit.s.sol`, gives two fresh addresses
+(owner, agent) OKB for gas and the owner 500 USDT0 (storage writes, test only), and writes their addresses and the
+circuit ids to `frontend/local-config.json` (git-ignored, no keys). It does not create a will. Open
+`http://127.0.0.1:5173/frontend/`, choose "Local anvil fork (developer mode)", act as the owner, and use **Create**.
+
+After changing a contract, regenerate the page's ABI and bytecode: `cd contracts; forge build`, then
+`node frontend/scripts/build-artifacts.mjs`. Unit tests: `cd frontend; npm test`.
+
+**Command-line re-evaluation** (same code as the button):
+
+```powershell
+node frontend/scripts/reevaluate.mjs <txHash> https://rpc.xlayer.tech
+```
+
+It exits 0 only if every check passed.
+
+**Verified on 2026-11-20** in the in-app browser against anvil forked at block 76,350,000 (all transactions local):
+the page created a will (key, escrow, cap 50, whitelist with trial limit 5 and 24 h cooling-off, threshold 20,
+freeze, agent; 14 transactions), funded it with 100 USDT0, then:
+
+| Decision | Who | Request | Circuits | Outcome |
+|---|---|---|---|---|
+| #1 | owner | 10 USDT0 to a saved payee | all ALLOW | allowed; balance 100 → 90, spent today 0 → 10. Estimate 2,455,039 gas, used 2,310,560 |
+| #2 | agent | 60 USDT0 to the same payee | Daily Cap DENY (10 + 60 > 50), Confirmation DENY (60 > 20) | blocked, `CIRCUIT_DENIED`; the transaction succeeded, no funds moved, spent today stayed 10. Estimate 2,445,024, used 2,236,118 |
+
+Re-evaluating both (button, transaction-hash form and CLI) passed all 26 checks each, including the recomputed
+`recordHash`. With a tampered memo and Daily Cap input, the same check reported five failures (eval output, offline
+simulation, packed amount, and both `recordHash` comparisons). A 5,000 USDT0 proposal was rejected in the form
+before any transaction.
+
+## Walrus Memory (optional, off by default)
+
+An optional side feature from handoff section 4 and PRD section 7: when you turn it on, the dashboard shows
+**non-binding hints** next to the propose-payment form, such as how often a payee was allowed or blocked before, the
+typical allowed amount, and your own notes about the payee. Circuits still make every decision. Memory never
+supplies a circuit input, an escrow argument or any other value that reaches a contract, and it never fills in or
+submits the form.
+
+**SDK (checked against the official docs on 2026-11-20).** The official TypeScript SDK is
+[`@mysten-incubation/memwal`](https://docs.wal.app/walrus-memory/sdk/quick-start) (Walrus Foundation docs; there are
+unrelated third-party packages with similar names). Its default client is
+`MemWal.create({ key, accountId, serverUrl?, namespace? })`, where `key` is an Ed25519 **delegate private key** and
+`accountId` is a Walrus Memory account object on Sui, both generated at memory.walrus.xyz. The client offers
+`remember(text)` (returns a job with `job_id`), `recall({ query, limit })` (returns `{ results: [{ text, distance }] }`,
+where a smaller distance is a closer match) and `health()`. The managed relayers are `https://relayer.memory.walrus.xyz`
+(Mainnet) and `https://relayer.dev.memwal.ai` (Testnet). Sources:
+[Quick Start](https://docs.wal.app/walrus-memory/sdk/quick-start),
+[Usage: Walrus Memory](https://docs.wal.app/walrus-memory/sdk/usage/memwal),
+[Overview](https://docs.wal.app/walrus-memory/sdk/overview), and
+[Production readiness](https://docs.wal.app/walrus-memory/sdk/production-readiness), which says to load these keys
+"from a secret manager, never from source or logs".
+
+**Why the browser uses a stub.** Every SDK call is signed with the delegate private key. This static page has no
+backend, and shipping or typing that key into it would expose it, so the dashboard does not load the SDK. Instead,
+`frontend/lib/memory.js` defines one adapter shape (the SDK's `remember` / `recall`) with two implementations:
+
+| Adapter | Where | Status |
+|---|---|---|
+| `createStubAdapter` | browser dashboard | **STUB.** It stores memories in this browser's `localStorage`, scoped to the connected wallet and escrow. The page says "STUB … Not connected to Walrus" in the panel. |
+| `createMemWalAdapter(MemWal, { key, accountId, serverUrl })` | agent side (Node), `frontend/scripts/memory-suggest.mjs <payee> [--note "…"]` | Written against the documented API and unit-tested with a fake `MemWal` class. **Not connected:** the package is not installed in this repository, there are no credentials, and it has never called a relayer. To use it, `npm install @mysten-incubation/memwal` and set `MEMWAL_PRIVATE_KEY`, `MEMWAL_ACCOUNT_ID` and optionally `MEMWAL_SERVER_URL` in the environment, never in a file. The script prints text hints only and has no wallet, RPC or contract access. |
+
+**Using it.** Connect a wallet, open a will, and tick **Walrus Memory suggestions** on the Propose payment card. The
+setting is stored per wallet in this browser (`localStorage` key `circuitwill:walrus-memory:v1:<address>`) and is off
+for any wallet that has not turned it on. A blue, dashed panel labelled "Suggestion · from memory · non-binding"
+appears beside the form. It reads "Suggestion based on past behaviour. Your circuits make the final decision." and
+updates as you type the **To** address. You still type and submit every field yourself.
+
+**What memory stores.** After a decision is recorded on-chain, it stores a short summary in this form:
+`CircuitWill payment of 10 USDT0 to 0x…: ALLOWED by circuits (decision #1).` It also stores any notes you type.
+Payment memos are never stored.
+
+**How the boundary is enforced** (`frontend/test/memory.test.mjs`, part of `npm test`):
+
+- **Off means off.** `app.js` statically imports only `lib/memory-pref.js`, which reads one flag. `lib/memory.js` is
+  loaded with a dynamic `import()` in a single function (`syncMemory`), after the flag is checked. With memory off,
+  the browser never requests `lib/memory.js` and contacts no memory service.
+- **No path to a contract.** `lib/memory.js` has no imports and no reference to ethers, contracts, `fetch`, `window`,
+  `document`, `localStorage` (storage is injected) or any payment field id. It never queries the page, and it is
+  given only the **To** input, which it reads. A fake-DOM test traps every write, `submit`, `click`, `focus` and
+  `dispatchEvent` on that input and finds none. Hints are frozen `{ kind, text }` objects with no amount or address
+  field.
+- **Senders stay clean.** Every function in `app.js` that sends a transaction (`sendTx`, `deployContract`,
+  `createWill`, `propose`, `withdraw`, `fund`, `saveRule`, `bind`) contains no memory reference. `propose()` takes its
+  arguments from exactly the three form fields.
+- **One-way learning.** Memory learns outcomes only after the fact, from a frozen `circuitwill:decision` event that
+  `showDecisionResult` dispatches after the receipt. The event is dispatched only while memory is on.
+- **The panel cannot submit the form.** It is an `<aside>` outside `<form id="propose-form">`, and its one button is
+  `type="button"`. The toggle starts unchecked.
+- **Failures change nothing.** A failing memory backend becomes an "unavailable" hint, and preference storage errors
+  read as off.
+
+### Success criterion: works with Walrus Memory turned off
+
+- [x] **Works with Walrus Memory turned off** (handoff section 5, PRD section 11). With memory off, which is the
+  default, the dashboard loads no memory module and makes no memory requests, and payments behave as in Phase 3. This
+  was shown in the browser on the local anvil fork; see the record below. No contract or circuit changed in this
+  phase.
+
+**Verified on 2026-11-20** in the in-app browser against a fresh anvil fork of block 76,350,000 (all transactions
+were local; `setup-anvil.ps1` taped out circuits 1 to 4). The dashboard created a new will with the same settings as
+Phase 3 (14 transactions) and funded it with 100 USDT0.
+
+| Step | Memory | Result |
+|---|---|---|
+| Fresh page, owner connected | off (default) | Toggle unchecked, note "Off (default)". Network log: `memory-pref.js` loaded, **no `lib/memory.js`**. `localStorage` empty |
+| #1: owner, 10 USDT0 to the saved payee | off | **Allowed**, all circuits ALLOW. Balance 100 → 90, spent today 0 → 10. Estimate 2,454,362 gas, used 2,309,346 |
+| #2: agent, 60 USDT0 to the same payee | off | **Blocked**, `CIRCUIT_DENIED` (Daily Cap DENY, Confirmation DENY). The transaction succeeded, no funds moved, spent today stayed 10. Estimate 2,444,530, used 2,235,355. Still no `lib/memory.js` request. The only hosts contacted were `127.0.0.1:5173` and `127.0.0.1:8545` |
+| Re-evaluation of #1 and #2 (`reevaluate.mjs`) | n/a | Both report "Re-evaluation matches the record", including the recomputed `recordHash` |
+| Agent turns memory on | on | `lib/memory.js` was requested only now. The panel shows the suggestion copy and "STUB … Not connected to Walrus". The pref key is stored for the agent's address only |
+| Agent types the payee | on | Hint: "Memory has nothing about this payee yet …". Amount and memo stay empty, and nothing is sent |
+| #3: agent, 5 USDT0 (typed by hand) | on | Allowed (balance 90 → 85). After the receipt, memory stored `CircuitWill payment of 5.000000 USDT0 to 0x3f40…: ALLOWED by circuits (decision #3).` with no memo |
+| Agent types the payee again and adds a note | on | Hints: "1 earlier request(s) … allowed by circuits, 0 blocked", "Typical allowed amount … 5 USDT0", "Your note: …". The form fields other than **To** stay empty, there is no new activity entry, and decisions recorded stay at 3 |
+| Reload, connect as owner, then as agent | per wallet | The owner is still off and `lib/memory.js` is not loaded. The agent is still on, and the hints come back from the stub |
+| Agent turns memory off | off | Panel unmounted and hidden, flag removed, no console errors |
+
+Decisions #1 and #2 match the Phase 3 record (same circuits, outcomes, balances and spent-today values; gas within
+0.1%). No contract, circuit, ABI or artifact file was changed in this phase.
+
+## Known limitations
+
+- **Walrus Memory is a stub in the browser.** The dashboard's memory suggestions use a local `localStorage` stub,
+  labelled as such on the page. The real SDK adapter (`createMemWalAdapter`, `scripts/memory-suggest.mjs`) is
+  written against the documented API and tested with a fake client only: the package is not installed here and it
+  has never talked to a Walrus relayer. See [Walrus Memory](#walrus-memory-optional-off-by-default).
+- **Dashboard only run locally.** It has been exercised against a local anvil fork only; it is not hosted on DeWEB
+  or anywhere else, and needs a processor and circuit ids that exist on X Layer before it can create a real will.
+- **One ERC-20 per escrow.** Native OKB is not supported.
+- **TapeOut trust.** TapeOut is unaudited and owner-upgradeable. An upgrade could change `eval`. The escrow records
+  the netlist hash and every input/output, but cannot prevent this. See `docs/TAPEOUT_INTERFACE.md`.
+- **Fail closed can lock funds.** If the processor stops working, every transfer is blocked, withdrawals included,
+  until the controller attaches a working circuit. With Daily Cap, at most `dailyCap` (≤ 4,294.967295 USDT0) can
+  leave per UTC day.
+- **The controller can change rules immediately.** For example, they can unfreeze, raise the cap, save a payee
+  (skipping its cooling-off), confirm a payment, or detach circuits, and then withdraw. Per the PRD, the NFT owner
+  controls the rule set. Freeze, cooling-off and confirmation therefore protect against the agent and against
+  mistakes, not against a compromised controller wallet. There is no timelock, but every change is a public event.
+- **Unknown payees.** A payee that was never added has age 0. With `coolingOffHours == 0` it can receive up to the
+  trial limit.
+- **One open confirmation per recipient.** Consuming a confirmation bumps that recipient's nonce, which invalidates any
+  other confirmation for the same recipient (for example the same payee with a different amount). Re-confirm it.
+- **Freeze without its circuit.** The freeze flag only acts through the Freeze circuit. `setFrozen(true)` reverts
+  without one, but detaching the Freeze circuit while frozen lifts the freeze.
+- **Circuit sizes.** Whitelist (237) and Confirmation (160) exceed the pinout document's targets (< 200, < 100); Daily
+  Cap (447) exceeds < 150. Unsigned comparisons from 2-input NANDs cost about 5 gates per bit in these constructions.
+- **Controller NFT hazards.** Do not transfer the controller NFT to the escrow's own address: no one could control
+  it again. `safeTransferFrom` to the escrow reverts, but plain `transferFrom` does not. A burnable controller NFT
+  would strand funds (`test_burnableControllerWouldStrandFunds`). Use `CircuitWillKey` or another non-burnable token.
+- **Gas.** About 2.3M to 2.4M gas per call with four circuits on real TapeOut (fork). The starvation check is a
+  heuristic: an eval counts as starved by the caller if it failed after using at least 15/16 of a limit below
+  `evalGasLimit`. A circuit that reverts on purpose after burning that much would make an underfunded call revert
+  instead of being recorded; with enough gas it gets its full budget and is recorded as REVERTED. A circuit that
+  needs more than `evalGasLimit` (default 3M) is always recorded as REVERTED; raise it with `setEvalGasLimit`.
+  The USDT0 transfer has no starvation check of its own: in the worst case it gets what is left of the 250k reserve
+  (enough on the fork), and fails closed (`TRANSFER_FAILED`) if that is ever not enough.
+- **Time.** The UTC day, payee age and confirmation expiry come from `block.timestamp` (the sequencer's clock).
+- **Not recorded.** Requests that revert before a decision exists: unauthorized caller, zero amount, zero
+  recipient, oversized memo.
+- **Scripts only rehearsed locally.** `TapeOutCircuit.s.sol` and `Deploy.s.sol` ran successfully against a local
+  anvil fork (full rehearsal passed, and the mainnet dry run on the latest block on 2026-11-20), never against
+  X Layer itself; see "Rehearsal on a local anvil fork" and [`docs/MAINNET_RUNBOOK.md`](docs/MAINNET_RUNBOOK.md).
+- **DeWEB hosting unconfirmed.** TapeOut's DeWEB (SiteRegistry) contracts exist on X Layer, but its spec covers BSC
+  only, there is no publishing CLI, and the X Layer site URL form is undocumented. The TapeOut circuit explorer link
+  format is also undocumented. See the runbook, step 10.
+- **Lint.** `forge build` prints lint notes (reentrancy-events and reentrancy-no-eth, which `nonReentrant`
+  covers; calls-loop for the single `controller()` lookup of the confirmation circuit; uninitialized-local for
+  variables assigned in assembly; byte-extraction and `uint64(block.timestamp)` casts; block-timestamp). They were
+  reviewed and left as is.

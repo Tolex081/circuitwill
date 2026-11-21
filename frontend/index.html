@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CircuitWill</title>
+  <meta name="description" content="Create a personal money will on X Layer using TapeOut circuits. Your rules decide; circuits cannot be talked around." />
+  <meta name="theme-color" content="#f3f1ec" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#151918" media="(prefers-color-scheme: dark)" />
+  <link rel="preload" href="./vendor/fonts/newsreader-var.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="./vendor/fonts/schibsted-grotesk-latin.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="brand">CircuitWill</div>
+    <div class="topbar-right">
+      <span id="network-badge" class="badge" role="status">Not connected</span>
+      <span id="account-badge" class="badge hidden"></span>
+      <button id="disconnect-btn" class="btn small ghost hidden" type="button">Disconnect</button>
+    </div>
+  </header>
+
+  <div class="final-banner" role="note">
+    <strong>Circuits make the final decision.</strong>
+    No agent, memory or button on this page can override a circuit result. This page only sends requests and reads the record.
+  </div>
+
+  <main id="main">
+    <!-- Screen 1: connect -->
+    <section id="connect-screen" class="hero">
+      <div class="hero-copy">
+        <h1>CircuitWill</h1>
+        <p class="subtitle">Your rules decide. Circuits cannot be talked around.</p>
+        <p class="lede">Create a personal money will on X Layer using TapeOut circuits.</p>
+      </div>
+
+      <div class="hero-form">
+        <div class="field">
+          <label for="rpc-input">Read RPC (X Layer, chain 196)</label>
+          <input id="rpc-input" type="url" spellcheck="false" />
+          <small>All reads and the re-evaluation use this endpoint. A local anvil fork is <code>http://127.0.0.1:8545</code>.</small>
+        </div>
+
+        <div class="connect-actions">
+          <button id="connect-injected-btn" class="btn primary big" type="button">Connect wallet</button>
+        </div>
+
+        <details id="dev-panel" class="dev-panel">
+          <summary>Local anvil fork (developer mode)</summary>
+          <p class="warn-text">Test only. The dashboard asks anvil to impersonate an address (<code>anvil_impersonateAccount</code>).
+            No key is used or stored. Works only with an RPC on 127.0.0.1 / localhost.</p>
+          <div class="field">
+            <label for="dev-account">Account to act as</label>
+            <input id="dev-account" list="dev-accounts" spellcheck="false" placeholder="0x…" />
+            <datalist id="dev-accounts"></datalist>
+          </div>
+          <button id="connect-dev-btn" class="btn" type="button">Use impersonated anvil account</button>
+        </details>
+        <p id="connect-error" class="error hidden"></p>
+      </div>
+    </section>
+
+    <!-- Open or create -->
+    <section id="open-screen" class="panel hidden">
+      <div class="panel-head">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="open-pane" type="button" role="tab" id="tab-open" aria-controls="open-pane" aria-selected="true">Open a CircuitWill</button>
+          <button class="tab" data-tab="create-pane" type="button" role="tab" id="tab-create" aria-controls="create-pane" aria-selected="false" tabindex="-1">Create a CircuitWill</button>
+        </div>
+      </div>
+
+      <div class="panel-body">
+        <div id="open-pane" class="tab-pane" role="tabpanel" aria-labelledby="tab-open">
+          <form id="open-form" class="grid-form">
+            <div class="field">
+              <label for="open-escrow">Escrow address</label>
+              <input id="open-escrow" spellcheck="false" placeholder="0x…" required />
+            </div>
+            <div class="field">
+              <label for="open-from">Read decisions from block</label>
+              <input id="open-from" inputmode="numeric" placeholder="escrow deployment block" />
+              <small>Leave empty to scan the last 10,000 blocks.</small>
+            </div>
+            <div class="wide"><button class="btn primary" type="submit">Open</button></div>
+          </form>
+        </div>
+
+        <div id="create-pane" class="tab-pane hidden" role="tabpanel" aria-labelledby="tab-create">
+          <p class="lede-small">Deploys a <code>CircuitWillEscrow</code> and mints its controller NFT (<code>CircuitWillKey</code>) to your wallet, sets the
+            parameters, then attaches the circuits. Each step is a separate transaction from your wallet.</p>
+          <form id="create-form">
+            <fieldset>
+              <legend>Escrow</legend>
+              <div class="grid-form">
+                <div class="field"><label for="c-token">Token (USDT0, 6 decimals)</label><input id="c-token" spellcheck="false" required /></div>
+                <div class="field"><label for="c-factory">TapeOut factory (isCPU check)</label><input id="c-factory" spellcheck="false" required /></div>
+                <div class="field"><label for="c-processor">TapeOut processor (circuits contract)</label><input id="c-processor" spellcheck="false" required /></div>
+                <div class="field"><label for="c-key">Existing CircuitWillKey (optional)</label><input id="c-key" spellcheck="false" placeholder="empty: deploy a new one" /></div>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend><label><input type="checkbox" id="c-cap-on" checked /> Daily Cap</label></legend>
+              <div class="grid-form">
+                <div class="field"><label for="c-cap-id">Circuit id</label><input id="c-cap-id" inputmode="numeric" /></div>
+                <div class="field"><label for="c-cap">Daily cap (USDT0)</label><input id="c-cap" inputmode="decimal" value="50" /></div>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend><label><input type="checkbox" id="c-wl-on" checked /> Payee Whitelist + Cooling-off</label></legend>
+              <div class="grid-form">
+                <div class="field"><label for="c-wl-id">Circuit id</label><input id="c-wl-id" inputmode="numeric" /></div>
+                <div class="field"><label for="c-trial">Trial limit for payees that are not saved (USDT0)</label><input id="c-trial" inputmode="decimal" value="5" /></div>
+                <div class="field"><label for="c-cool">Cooling-off (hours)</label><input id="c-cool" inputmode="numeric" value="24" /></div>
+                <div class="field wide"><label for="c-payees">Saved payees (one per line or comma-separated)</label><textarea id="c-payees" rows="2" spellcheck="false"></textarea>
+                  <label class="inline"><input type="checkbox" id="c-save-self" checked /> Also save my own wallet (otherwise withdrawals to it count as a new payee)</label></div>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend><label><input type="checkbox" id="c-conf-on" checked /> Confirmation Threshold</label></legend>
+              <div class="grid-form">
+                <div class="field"><label for="c-conf-id">Circuit id</label><input id="c-conf-id" inputmode="numeric" /></div>
+                <div class="field"><label for="c-threshold">Confirmation needed above (USDT0)</label><input id="c-threshold" inputmode="decimal" value="20" /></div>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend><label><input type="checkbox" id="c-frz-on" checked /> Freeze</label></legend>
+              <div class="grid-form">
+                <div class="field"><label for="c-frz-id">Circuit id</label><input id="c-frz-id" inputmode="numeric" /></div>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Agent key (optional)</legend>
+              <div class="grid-form">
+                <div class="field"><label for="c-agent">Agent address (can only propose payments)</label><input id="c-agent" spellcheck="false" placeholder="0x… or empty" /></div>
+              </div>
+            </fieldset>
+            <button class="btn primary big" type="submit">Create CircuitWill</button>
+            <ol id="create-steps" class="steps"></ol>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screen 2: dashboard -->
+    <section id="dashboard" class="hidden">
+      <div id="decision-result" class="hidden"></div>
+
+      <div class="ledger">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>This CircuitWill</h2>
+          </div>
+          <div class="panel-body">
+            <dl class="kv" id="will-info"></dl>
+            <div class="row-actions">
+              <button id="refresh-btn" class="btn small" type="button">Refresh</button>
+              <button id="close-btn" class="btn small ghost" type="button">Open another</button>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Balance</h2>
+          </div>
+          <div class="panel-body">
+            <div class="big-number" id="balance-value">—</div>
+            <dl class="kv" id="balance-info"></dl>
+            <form id="fund-form" class="inline-form">
+              <input id="fund-amount" inputmode="decimal" placeholder="USDT0" aria-label="Amount to fund in USDT0" />
+              <button class="btn" type="submit">Fund</button>
+            </form>
+            <small>Funding is a plain USDT0 transfer from your wallet to the escrow.</small>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Propose payment</h2>
+            <label class="memory-toggle" for="memory-toggle">
+              <input type="checkbox" id="memory-toggle" disabled />
+              <span>Walrus Memory suggestions <span class="muted">(optional)</span></span>
+            </label>
+            <p id="memory-toggle-note" class="muted small-text">Connect a wallet to choose. Off by default.</p>
+          </div>
+          <div class="panel-body">
+            <div class="propose-layout">
+              <form id="propose-form" class="grid-form">
+                <div class="field"><label for="p-to">To</label><input id="p-to" spellcheck="false" placeholder="0x…" required /></div>
+                <div class="field"><label for="p-amount">Amount (USDT0)</label><input id="p-amount" inputmode="decimal" required /></div>
+                <div class="field wide"><label for="p-memo">Memo <span id="p-memo-count" class="muted"></span></label><input id="p-memo" maxlength="256" /></div>
+                <div class="wide">
+                  <button class="btn primary big" type="submit">Submit to CircuitWill</button>
+                  <p class="muted small-text">Final decision is made by your circuits. Gas is set from <code>eth_estimateGas</code>.</p>
+                </div>
+              </form>
+              <!-- Filled by lib/memory.js only while Walrus Memory is on. Advisory text; never part of the form. -->
+              <aside id="memory-panel" class="memory-panel hidden" aria-label="Memory suggestions (non-binding)"></aside>
+            </div>
+            <details class="sub">
+              <summary>Withdraw (controller only, circuit-gated like any payment)</summary>
+              <form id="withdraw-form" class="grid-form">
+                <div class="field"><label for="w-to">To</label><input id="w-to" spellcheck="false" placeholder="0x…" required /></div>
+                <div class="field"><label for="w-amount">Amount (USDT0)</label><input id="w-amount" inputmode="decimal" required /></div>
+                <div class="wide"><button class="btn" type="submit">Request withdrawal</button></div>
+              </form>
+            </details>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Active rules</h2>
+          </div>
+          <div class="panel-body">
+            <div class="table-wrap">
+              <table class="table" id="circuits-table">
+                <thead><tr><th>#</th><th>Circuit</th><th>Parameters in force</th><th>Processor / id</th><th>Netlist hash</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <p id="circuits-empty" class="warn-text hidden">No circuits attached: every payment and withdrawal is blocked (NO_CIRCUITS).</p>
+            <details class="sub">
+              <summary>Attach a circuit</summary>
+              <form id="attach-form" class="grid-form">
+                <div class="field"><label for="a-kind">Kind</label>
+                  <select id="a-kind"><option value="1">Daily Cap</option><option value="2">Payee Whitelist + Cooling-off</option><option value="3">Confirmation Threshold</option><option value="4">Freeze</option></select></div>
+                <div class="field"><label for="a-processor">Processor</label><input id="a-processor" spellcheck="false" /></div>
+                <div class="field"><label for="a-id">Circuit id</label><input id="a-id" inputmode="numeric" /></div>
+                <div class="wide"><button class="btn" type="submit">Attach</button></div>
+              </form>
+            </details>
+          </div>
+        </article>
+
+        <article class="panel" id="rules-card">
+          <div class="panel-head">
+            <h2>Edit rules</h2>
+            <p class="warn-text">Changing rules takes effect on the next payment. Controller only.</p>
+          </div>
+          <div class="panel-body">
+            <div class="rules-list">
+              <form class="rule" data-rule="dailyCap"><label for="r-cap">Daily cap (USDT0)</label><div class="inline-form"><input id="r-cap" inputmode="decimal" /><button class="btn small" type="submit">Save</button></div><small class="current"></small></form>
+              <form class="rule" data-rule="trialLimit"><label for="r-trial">Trial limit (USDT0)</label><div class="inline-form"><input id="r-trial" inputmode="decimal" /><button class="btn small" type="submit">Save</button></div><small class="current"></small></form>
+              <form class="rule" data-rule="coolingOffHours"><label for="r-cool">Cooling-off (hours)</label><div class="inline-form"><input id="r-cool" inputmode="numeric" /><button class="btn small" type="submit">Save</button></div><small class="current"></small></form>
+              <form class="rule" data-rule="confirmationThreshold"><label for="r-threshold">Confirmation above (USDT0)</label><div class="inline-form"><input id="r-threshold" inputmode="decimal" /><button class="btn small" type="submit">Save</button></div><small class="current"></small></form>
+              <form class="rule" data-rule="agent"><label for="r-agent">Agent key</label><div class="inline-form"><input id="r-agent" spellcheck="false" placeholder="0x… (empty clears)" /><button class="btn small" type="submit">Save</button></div><small class="current"></small></form>
+              <form class="rule" data-rule="evalGasLimit"><label for="r-gas">Eval gas limit per circuit</label><div class="inline-form"><input id="r-gas" inputmode="numeric" /><button class="btn small" type="submit">Save</button></div><small class="current"></small></form>
+              <div class="rule"><span class="label">Freeze</span><div class="inline-form"><button id="freeze-btn" class="btn small danger" type="button">Freeze</button><button id="unfreeze-btn" class="btn small" type="button">Unfreeze</button></div><small class="current" id="freeze-current"></small></div>
+            </div>
+
+            <h3>Payees</h3>
+            <div class="table-wrap">
+              <table class="table" id="payees-table">
+                <thead><tr><th>Payee</th><th>Saved</th><th>Known for</th><th>First seen</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <form id="payee-form" class="inline-form">
+              <input id="payee-addr" spellcheck="false" placeholder="0x…" aria-label="Payee address" />
+              <label class="inline"><input type="checkbox" id="payee-saved" checked /> saved</label>
+              <button class="btn small" type="submit">Add / update payee</button>
+            </form>
+
+            <h3>Confirm one exact payment</h3>
+            <form id="confirm-form" class="grid-form">
+              <div class="field"><label for="cf-to">To</label><input id="cf-to" spellcheck="false" placeholder="0x…" required /></div>
+              <div class="field"><label for="cf-amount">Amount (USDT0)</label><input id="cf-amount" inputmode="decimal" required /></div>
+              <div class="wide inline-form">
+                <button class="btn small" type="submit" data-action="lookup">Look up</button>
+                <button class="btn small" type="button" id="cf-confirm">Confirm payment</button>
+                <button class="btn small ghost" type="button" id="cf-revoke">Revoke</button>
+              </div>
+            </form>
+            <dl class="kv" id="confirm-info"></dl>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Recent decisions</h2>
+            <span class="pill final">Every circuit decision is final</span>
+          </div>
+          <div class="panel-body">
+            <div class="table-wrap">
+              <table class="table" id="decisions-table">
+                <thead><tr><th>#</th><th>Time (UTC)</th><th>Action</th><th>To</th><th>Amount</th><th>Circuit decision</th><th>Blocked by</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <p id="decisions-note" class="muted small-text"></p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- Screen 4 for anyone: re-evaluate by transaction hash -->
+    <section class="panel" id="reeval-card">
+      <div class="panel-head">
+        <h2>Re-evaluate any decision</h2>
+      </div>
+      <div class="panel-body">
+        <p>Paste the hash of a <code>proposePayment</code> or <code>withdraw</code> transaction. The page reads its logs, re-runs every
+          circuit with TapeOut <code>eval</code> on the recorded input, checks the netlist hash, and recomputes <code>recordHash</code>.
+          Read-only: the recorded decision is final and nothing here can change it.</p>
+        <form id="reeval-form" class="inline-form">
+          <input id="reeval-tx" spellcheck="false" placeholder="0x… transaction hash" aria-label="Transaction hash" />
+          <button class="btn" type="submit">Re-evaluate</button>
+        </form>
+        <div id="reeval-output"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Activity</h2>
+      </div>
+      <div class="panel-body">
+        <ol id="activity" class="activity"></ol>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden" role="alert"><span></span><button class="btn small ghost" type="button" onclick="this.parentElement.classList.add('hidden')">Close</button></div>
+
+  <footer class="footer">
+    CircuitWill MVP. Nothing in this dashboard implies a live deployment: check the network badge above.
+  </footer>
+
+  <script type="module" src="./app.js"></script>
+  <!-- Presentation only: hover/press (Motion) and the one scroll moment (GSAP). Vendored, no CDN. -->
+  <script src="./vendor/motion-14.14.0.min.js" defer></script>
+  <script src="./vendor/gsap-3.15.1.min.js" defer></script>
+  <script src="./vendor/ScrollTrigger-3.15.1.min.js" defer></script>
+  <script type="module" src="./interactions.js"></script>
+</body>
+</html>

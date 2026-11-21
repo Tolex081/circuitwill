@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "circuitwill-dashboard",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["frontend/serve.mjs"],
+      "port": 5173
+    }
+  ]
+}
