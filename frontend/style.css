@@ -137,6 +137,7 @@ a:hover { color: var(--ink); }
 .badge.ok::before { background: currentColor; }
 .badge.local { color: var(--warn); font-weight: 600; }
 .badge.local::before { background: currentColor; }
+.badge.bad { color: var(--block); font-weight: 600; }
 #account-badge { font-family: var(--mono); font-size: 0.8rem; color: var(--ink); }
 #account-badge::before { display: none; }
 
@@ -170,6 +171,8 @@ main { padding: 0 var(--edge); }
 
 .dev-panel { border-top: 1px solid var(--rule); padding-top: 14px; }
 .dev-panel[open] > *:not(summary) { margin-top: 14px; }
+#dev-panel { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
+#dev-panel > .field { align-self: stretch; }
 details > summary {
   cursor: pointer; font-weight: 600; font-size: 0.9rem; list-style: none; display: inline-flex; align-items: center; gap: 10px;
   min-height: 44px;

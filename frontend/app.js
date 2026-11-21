@@ -63,10 +63,13 @@ const usdt = (v) => `${formatUsdt0(v)} USDT0`;
 const same = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 const show = (el, on = true) => (typeof el === 'string' ? $(el) : el).classList.toggle('hidden', !on);
 
+const isLocalHost = (host) => ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(host);
+/// True when the page itself is served from this computer (developer setup). Only then is the local test network offered.
+const PAGE_IS_LOCAL = isLocalHost(location.hostname);
+
 function isLocalRpc(url) {
   try {
-    const u = new URL(url);
-    return ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
+    return isLocalHost(new URL(url).hostname);
   } catch {
     return false;
   }
@@ -142,13 +145,57 @@ function toast(msg) {
 
 // ------------------------------------------------------------------ providers and wallet
 
+// The public X Layer RPC sometimes takes more than 10 s to answer; one retry covers a dropped request.
+const NETWORK_TIMEOUT_MS = 20000;
+const NETWORK_ATTEMPTS = 2;
+
+function withTimeout(promise, ms) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => (timer = setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'TIMEOUT' })), ms))),
+  ]);
+}
+
+/// Plain-language explanation of why the page cannot read from `rpc`.
+function networkErrorText(e, rpc) {
+  if (e?.code === 'BAD_URL') return 'That server address is not a web address. It should look like https://rpc.example.com.';
+  if (e?.code === 'WRONG_CHAIN') return `That server is not X Layer (it reports chain ${e.chainId}). CircuitWill only works on X Layer.`;
+  if (isLocalRpc(rpc)) return `Can't reach the local test network at ${rpc}. Is anvil running on this computer?`;
+  if (rpc === DEFAULTS.rpc) return "Can't reach X Layer right now. Check your internet connection and try again in a moment.";
+  let host = rpc;
+  try {
+    host = new URL(rpc).host;
+  } catch {
+    /* keep the raw text */
+  }
+  return `Can't reach ${host}. Check the server address, or choose "X Layer (recommended)" under Advanced.`;
+}
+
 async function setRpc(url) {
-  const rpc = String(url).trim();
-  new URL(rpc); // throws on garbage
+  const rpc = String(url ?? '').trim();
+  try {
+    if (!/^https?:$/.test(new URL(rpc).protocol)) throw new Error('protocol');
+  } catch {
+    throw Object.assign(new Error('bad url'), { code: 'BAD_URL' });
+  }
   const provider = new ethers.JsonRpcProvider(rpc, Number(CHAIN_ID), { staticNetwork: true, batchMaxCount: 1 });
   provider.pollingInterval = isLocalRpc(rpc) ? 500 : 2000;
-  const chainId = BigInt(await provider.send('eth_chainId', []));
-  if (chainId !== CHAIN_ID) throw new Error(`The RPC reports chain ${chainId}; CircuitWill runs on X Layer (196).`);
+  let chainId;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      chainId = BigInt(await withTimeout(provider.send('eth_chainId', []), NETWORK_TIMEOUT_MS));
+      break;
+    } catch (e) {
+      if (attempt < NETWORK_ATTEMPTS && !isLocalRpc(rpc)) continue;
+      provider.destroy();
+      throw e;
+    }
+  }
+  if (chainId !== CHAIN_ID) {
+    provider.destroy();
+    throw Object.assign(new Error('wrong chain'), { code: 'WRONG_CHAIN', chainId });
+  }
   let isAnvil = false;
   if (isLocalRpc(rpc)) {
     try {
@@ -167,19 +214,30 @@ async function setRpc(url) {
 
 function renderNetwork() {
   const b = $('network-badge');
-  if (!state.read) {
-    b.textContent = 'Not connected';
+  if (state.networkError) {
+    b.textContent = state.networkWrongChain ? 'Not X Layer' : "Can't reach network";
+    b.className = 'badge bad';
+    b.title = state.networkError;
+  } else if (!state.read) {
+    b.textContent = state.networkChecking ? 'Checking network…' : 'No network';
     b.className = 'badge';
+    b.title = '';
   } else if (isLocalRpc(state.rpc)) {
-    b.textContent = state.isAnvil ? 'LOCAL anvil fork of X Layer (chain 196): test only' : 'LOCAL node (chain 196): test only';
+    b.textContent = state.isAnvil ? 'Test network · not real money' : 'Local node · test only';
     b.className = 'badge local';
-  } else {
-    b.textContent = `X Layer (196) via ${new URL(state.rpc).host}`;
+    b.title = `Local copy of X Layer at ${state.rpc}. Nothing here is real or public.`;
+  } else if (state.rpc === DEFAULTS.rpc) {
+    b.textContent = 'X Layer';
     b.className = 'badge ok';
+    b.title = `X Layer mainnet (chain 196), read through ${new URL(state.rpc).host}`;
+  } else {
+    b.textContent = 'X Layer · custom server';
+    b.className = 'badge ok';
+    b.title = `X Layer (chain 196), read through ${new URL(state.rpc).host}`;
   }
   const a = $('account-badge');
   if (state.account) {
-    a.textContent = `${state.mode === 'anvil' ? 'impersonated ' : ''}${short(state.account)}${roleText()}`;
+    a.textContent = `${state.mode === 'anvil' ? 'test account ' : ''}${short(state.account)}${roleText()}`;
     a.title = state.account;
     show(a);
     show('disconnect-btn');
@@ -187,6 +245,58 @@ function renderNetwork() {
     show(a, false);
     show('disconnect-btn', false);
   }
+}
+
+/// The server the chosen network reads from: X Layer's public RPC, the local test node, or a custom URL.
+function networkRpc() {
+  const n = $('network-select').value;
+  if (n === 'local') return state.localConfig?.rpc ?? 'http://127.0.0.1:8545';
+  if (n === 'custom') return $('rpc-input').value.trim();
+  return DEFAULTS.rpc;
+}
+
+/// Connects reads to the chosen network. With `quiet`, a failure only shows in the badge and the connect screen.
+async function applyNetwork({ quiet = false } = {}) {
+  const choice = $('network-select').value;
+  show('rpc-field', choice === 'custom');
+  show('dev-panel', choice === 'local');
+  if (choice === 'custom' && !$('rpc-input').value.trim()) {
+    $('rpc-input').focus();
+    return;
+  }
+  // A test account only exists on the local test network.
+  if (state.mode === 'anvil' && choice !== 'local') disconnect();
+  state.read?.destroy();
+  state.read = null;
+  state.rpc = null;
+  state.networkError = null;
+  state.networkChecking = true;
+  renderNetwork();
+  const rpc = networkRpc();
+  try {
+    await setRpc(rpc);
+  } catch (e) {
+    console.error(e);
+    state.networkError = networkErrorText(e, rpc);
+    state.networkWrongChain = e?.code === 'WRONG_CHAIN';
+    const el = $('connect-error');
+    el.textContent = state.networkError;
+    show(el);
+    if (!quiet) throw new Error(state.networkError);
+    return;
+  } finally {
+    state.networkChecking = false;
+    renderNetwork();
+  }
+  show('connect-error', false);
+  if (state.escrowAddr) await refresh();
+}
+
+/// The read provider for the chosen network, connecting first if needed.
+async function ensureRead() {
+  if (!state.read) await applyNetwork();
+  if (!state.read) throw new Error(state.networkError ?? 'Choose a network under Advanced first.');
+  return state.read;
 }
 
 function roleText() {
@@ -198,8 +308,8 @@ function roleText() {
 
 async function connectInjected() {
   const eth = window.ethereum;
-  if (!eth) throw new Error('No browser wallet found. Install one, or use the local anvil developer mode.');
-  await setRpc($('rpc-input').value);
+  if (!eth) throw new Error('No browser wallet found. Install a wallet that supports X Layer, then reload this page.');
+  await ensureRead();
   await eth.request({ method: 'eth_requestAccounts' });
   let chainId = BigInt(await eth.request({ method: 'eth_chainId' }));
   if (chainId !== CHAIN_ID) {
@@ -221,10 +331,9 @@ async function connectInjected() {
 }
 
 async function connectAnvil() {
-  const rpc = $('rpc-input').value.trim();
-  if (!isLocalRpc(rpc)) throw new Error('Developer mode only works with a local RPC (127.0.0.1 / localhost).');
-  await setRpc(rpc);
-  if (!state.isAnvil) throw new Error('The local RPC is not anvil (anvil_nodeInfo failed).');
+  if ($('network-select').value !== 'local') throw new Error('Test accounts only work on the local test network.');
+  await ensureRead();
+  if (!state.isAnvil) throw new Error('The local test network is not anvil, so it cannot act as a test account.');
   const addr = parseAddress($('dev-account').value, 'Account');
   await state.read.send('anvil_impersonateAccount', [addr]);
   state.signer = new ethers.JsonRpcSigner(state.read, addr);
@@ -483,7 +592,7 @@ function updateUrl() {
 }
 
 async function openEscrow(addr, from) {
-  if (!state.read) await setRpc($('rpc-input').value);
+  await ensureRead();
   state.escrowAddr = parseAddress(addr, 'Escrow');
   state.fromBlock = from === '' || from == null ? null : Number(parseIntInRange(from, { max: 2n ** 53n, what: 'From block' }));
   const code = await state.read.getCode(state.escrowAddr);
@@ -763,7 +872,7 @@ async function runReevaluate(txHash, decisionId, target) {
   const log = activity(`Re-evaluate ${decisionId != null ? `decision #${decisionId}` : short(txHash)}`);
   target.innerHTML = '<p class="muted">Re-running the circuits…</p>';
   try {
-    if (!state.read) await setRpc($('rpc-input').value);
+    await ensureRead();
     const rec = await loadDecisionFromTx(state.read, txHash, { escrow: state.escrowAddr && decisionId != null ? state.escrowAddr : undefined, decisionId });
     const res = await reEvaluate(state.read, rec);
     target.innerHTML = decisionDetailHtml({ ...rec.decision }, rec.circuits) + reevalHtml(res);
@@ -887,6 +996,14 @@ async function lookupConfirmation() {
 function bind() {
   $('connect-injected-btn').addEventListener('click', (ev) => guard(ev.currentTarget, connectInjected));
   $('connect-dev-btn').addEventListener('click', (ev) => guard(ev.currentTarget, connectAnvil));
+  $('network-select').addEventListener('change', (ev) => guard(ev.currentTarget, () => applyNetwork()));
+  $('rpc-apply-btn').addEventListener('click', (ev) => guard(ev.currentTarget, () => applyNetwork()));
+  $('rpc-input').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      guard($('rpc-apply-btn'), () => applyNetwork());
+    }
+  });
   $('disconnect-btn').addEventListener('click', disconnect);
   const tabs = [...document.querySelectorAll('.tab')];
   const selectTab = (t) => {
@@ -1054,9 +1171,9 @@ async function loadLocalConfig() {
 async function init() {
   bind();
   bindMemoryToggle();
-  const cfg = await loadLocalConfig();
+  // local-config.json (written by scripts/setup-anvil.ps1) only applies when the page runs on this computer.
+  const cfg = PAGE_IS_LOCAL ? await loadLocalConfig() : null;
   state.localConfig = cfg;
-  $('rpc-input').value = cfg?.rpc ?? DEFAULTS.rpc;
   $('c-token').value = cfg?.token ?? DEFAULTS.token;
   $('c-factory').value = cfg?.factory ?? DEFAULTS.factory;
   if (cfg) {
@@ -1072,12 +1189,27 @@ async function init() {
       .map(([name, a]) => `<option value="${esc(a)}">${esc(name)}</option>`)
       .join('');
     $('dev-account').value = cfg.accounts?.owner ?? '';
-    $('dev-panel').open = true;
     prefillAttachId();
   }
-  // The page can be opened read-only (no wallet) for a given escrow: ?escrow=0x…&from=<block>
+
+  // Network: X Layer by default. On this computer with a local setup, the local test network. ?rpc=<url> overrides.
   const params = new URLSearchParams(location.search);
-  if (params.get('rpc')) $('rpc-input').value = params.get('rpc');
+  $('network-local-option').hidden = !PAGE_IS_LOCAL;
+  let choice = PAGE_IS_LOCAL && cfg ? 'local' : 'mainnet';
+  const rpcParam = params.get('rpc')?.trim();
+  if (rpcParam) {
+    if (rpcParam === DEFAULTS.rpc) choice = 'mainnet';
+    else if (PAGE_IS_LOCAL && rpcParam === (cfg?.rpc ?? 'http://127.0.0.1:8545')) choice = 'local';
+    else {
+      choice = 'custom';
+      $('rpc-input').value = rpcParam;
+    }
+  }
+  $('network-select').value = choice;
+  $('advanced-panel').open = choice !== 'mainnet';
+  await applyNetwork({ quiet: true });
+
+  // The page can be opened read-only (no wallet) for a given escrow: ?escrow=0x…&from=<block>
   const escrow = params.get('escrow');
   show('open-screen');
   if (escrow) {

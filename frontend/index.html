@@ -23,7 +23,7 @@
       CircuitWill
     </div>
     <div class="topbar-right">
-      <span id="network-badge" class="badge" role="status">Not connected</span>
+      <span id="network-badge" class="badge" role="status">Checking network…</span>
       <span id="account-badge" class="badge hidden"></span>
       <button id="disconnect-btn" class="btn small ghost hidden" type="button">Disconnect</button>
       <button id="theme-btn" class="theme-btn" type="button" aria-label="Switch to light theme" title="Switch to light theme" hidden>
@@ -48,28 +48,43 @@
       </div>
 
       <div class="hero-form">
-        <div class="field">
-          <label for="rpc-input">Read RPC (X Layer, chain 196)</label>
-          <input id="rpc-input" type="url" spellcheck="false" />
-          <small>All reads and the re-evaluation use this endpoint. A local anvil fork is <code>http://127.0.0.1:8545</code>.</small>
-        </div>
-
         <div class="connect-actions">
           <button id="connect-injected-btn" class="btn primary big" type="button">Connect wallet</button>
+          <small>Use a wallet that supports X Layer. You can also view any CircuitWill below without connecting.</small>
         </div>
-
-        <details id="dev-panel" class="dev-panel">
-          <summary>Local anvil fork (developer mode)</summary>
-          <p class="warn-text">Test only. The dashboard asks anvil to impersonate an address (<code>anvil_impersonateAccount</code>).
-            No key is used or stored. Works only with an RPC on 127.0.0.1 / localhost.</p>
-          <div class="field">
-            <label for="dev-account">Account to act as</label>
-            <input id="dev-account" list="dev-accounts" spellcheck="false" placeholder="0x…" />
-            <datalist id="dev-accounts"></datalist>
-          </div>
-          <button id="connect-dev-btn" class="btn" type="button">Use impersonated anvil account</button>
-        </details>
         <p id="connect-error" class="error hidden"></p>
+
+        <details id="advanced-panel" class="dev-panel">
+          <summary>Advanced: network</summary>
+          <div class="field">
+            <label for="network-select">Network</label>
+            <select id="network-select">
+              <option value="mainnet">X Layer (recommended)</option>
+              <option value="local" id="network-local-option" hidden>Local test network (this computer, not real money)</option>
+              <option value="custom">Custom X Layer server (RPC URL)</option>
+            </select>
+          </div>
+          <small id="network-help">The page reads balances and past decisions from this network. It must be X Layer (chain 196).</small>
+          <div class="field hidden" id="rpc-field">
+            <label for="rpc-input">Server address (RPC URL)</label>
+            <div class="inline-form">
+              <input id="rpc-input" type="url" spellcheck="false" placeholder="https://…" />
+              <button id="rpc-apply-btn" class="btn small" type="button">Use</button>
+            </div>
+            <small>For people who run their own X Layer node or use a private endpoint.</small>
+          </div>
+
+          <div id="dev-panel" class="hidden">
+            <p class="warn-text">Developer mode for the local test network only. The page asks the local test node to act as
+              an address (<code>anvil_impersonateAccount</code>). No key is used or stored.</p>
+            <div class="field">
+              <label for="dev-account">Account to act as</label>
+              <input id="dev-account" list="dev-accounts" spellcheck="false" placeholder="0x…" />
+              <datalist id="dev-accounts"></datalist>
+            </div>
+            <button id="connect-dev-btn" class="btn" type="button">Use test account</button>
+          </div>
+        </details>
       </div>
     </section>
 

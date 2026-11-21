@@ -378,7 +378,7 @@ been exercised against a local anvil fork.
 
 | Card | What it does |
 |---|---|
-| Connect | A browser wallet (EIP-1193, switched to chain 196), or on a local anvil node only, an impersonated address (`anvil_impersonateAccount`; no key). Without a wallet the page is read-only: `?escrow=<address>&from=<block>` opens any will |
+| Connect | A browser wallet (EIP-1193, switched to chain 196). Without a wallet the page is read-only: `?escrow=<address>&from=<block>` opens any will. The network is chosen automatically and shown as a badge (see "Network" below); the network choice and developer mode sit in a collapsed **Advanced: network** section |
 | Create | Deploys `CircuitWillKey` (or reuses one), mints the controller NFT to your wallet, deploys `CircuitWillEscrow`, sets each circuit's parameters, then attaches it (same order as `Deploy.s.sol`), then sets the agent. One transaction per step |
 | This CircuitWill / Balance | Escrow, controller NFT and its owner, agent (active or not), USDT0 balance, spent today (`currentSpentToday`) against the cap, frozen. **Fund** is a plain USDT0 `transfer` |
 | Propose payment | `proposePayment(to, amount, memo)` for the controller or the active agent; **Withdraw** for the controller. The result banner shows the recorded `Decision` and each circuit's status |
@@ -422,7 +422,24 @@ node frontend/serve.mjs
 CPU, mints 845 NAND, tapes out the four circuits with `script/TapeOutCircuit.s.sol`, gives two fresh addresses
 (owner, agent) OKB for gas and the owner 500 USDT0 (storage writes, test only), and writes their addresses and the
 circuit ids to `frontend/local-config.json` (git-ignored, no keys). It does not create a will. Open
-`http://127.0.0.1:5173/frontend/`, choose "Local anvil fork (developer mode)", act as the owner, and use **Create**.
+`http://127.0.0.1:5173/frontend/`: the page picks the local test network by itself. Under **Advanced: network**, act
+as the owner with **Use test account**, then use **Create**.
+
+**Network.** Users never have to type a server address. The page reads from:
+
+| Where the page runs | Default network | Badge |
+|---|---|---|
+| Anywhere public (for example circuitwill.vercel.app) | X Layer, through `https://rpc.xlayer.tech` | **X Layer** |
+| `localhost` / `127.0.0.1` with `frontend/local-config.json` present | the local anvil fork from that file | **Test network · not real money** |
+| Any, with `?rpc=<url>` or **Advanced → Custom X Layer server** | that server, if it reports chain 196 | **X Layer · custom server** |
+
+The local test network option and developer mode (test accounts via `anvil_impersonateAccount`, no key) appear only
+when the page itself runs on `localhost` / `127.0.0.1`. `local-config.json` is read only there. Problems are
+explained in plain words: "Can't reach X Layer right now…", "That server is not X Layer (it reports chain …)", or
+"Can't reach the local test network… Is anvil running?". The badge then shows **Can't reach network** or
+**Not X Layer**. The page waits up to 20 s for the public RPC and retries once, because the public RPC sometimes
+takes more than 10 s to answer. Wallet transactions always go through the wallet, whichever network is used for
+reading.
 
 After changing a contract, regenerate the page's ABI and bytecode: `cd contracts; forge build`, then
 `node frontend/scripts/build-artifacts.mjs`. Unit tests: `cd frontend; npm test`.
