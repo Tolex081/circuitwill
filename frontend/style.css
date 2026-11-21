@@ -117,7 +117,15 @@ a:hover { color: var(--ink); }
   padding: 16px var(--edge);
   position: sticky; top: 0; z-index: 6; background: var(--paper); border-bottom: 1px solid var(--rule);
 }
-.brand { font-family: var(--serif); font-size: 1.45rem; font-variation-settings: 'opsz' 30; letter-spacing: -0.01em; }
+.brand { font-family: var(--serif); font-size: 1.45rem; font-variation-settings: 'opsz' 30; letter-spacing: -0.01em;
+  display: inline-flex; align-items: center; gap: 0.32em; }
+
+/* The mark: a NAND gate, the one gate every CircuitWill circuit is built from. Ink gate, accent inversion bubble
+   (the "no" a circuit can answer). Drawn in line like the authored icons, so it follows the theme. */
+.mark { display: block; flex: none; width: 1.15em; height: 1.15em; overflow: visible;
+  fill: none; stroke: currentColor; stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round; }
+.mark .mark-out { stroke: var(--accent); }
+.hero h1 .mark { width: 0.95em; height: 0.95em; margin: 0 0 0.12em -0.1em; stroke-width: 1.5; }
 .topbar-right { display: flex; gap: 6px 20px; align-items: center; flex-wrap: wrap; }
 
 .badge {
