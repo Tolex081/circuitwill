@@ -684,7 +684,7 @@ function renderAll() {
   tbody.innerHTML = i.circuits
     .map(
       (c, idx) => `<tr>
-        <td>${idx}</td><td><strong>${esc(KIND_LABEL[c.kind])}</strong></td><td>${esc(paramsText(c.kind))}</td>
+        <td>${idx}</td><td>${kindTag(c.kind)}</td><td>${esc(paramsText(c.kind))}</td>
         <td class="mono">${esc(short(c.processor))} / ${esc(c.circuitId)}</td>
         <td class="mono" title="${esc(c.netlistHash)}">${esc(c.netlistHash.slice(0, 12))}…</td>
         <td><button class="btn small ghost" data-detach="${idx}" ${isController ? '' : 'disabled'}>Detach</button></td></tr>`,
@@ -797,8 +797,14 @@ async function loadDecisions() {
 
 function blockedBy(rec) {
   const bad = rec.circuits.filter((c) => c.status !== STATUS.ALLOW);
-  if (bad.length) return bad.map((c) => `${KIND_LABEL[c.kind]} (${STATUS_NAME[c.status]})`).join(', ');
-  return rec.decision.allowed ? '—' : REASON_NAME[rec.decision.reason];
+  if (bad.length) return bad.map((c) => `${kindTag(c.kind)} <small>${esc(STATUS_NAME[c.status])}</small>`).join(' ');
+  return esc(rec.decision.allowed ? '—' : REASON_NAME[rec.decision.reason]);
+}
+
+/// Circuit kind as a chip in that circuit's colour (.k1 to .k4 in style.css). Returns escaped HTML.
+function kindTag(kind) {
+  const k = Number(kind);
+  return `<span class="kind${k >= 1 && k <= 4 ? ` k${k}` : ''}">${esc(KIND_LABEL[k] ?? `Unknown (${k})`)}</span>`;
 }
 
 function verdictPill(allowed) {
@@ -820,7 +826,7 @@ function renderDecisions() {
       return `<tr>
         <td>${esc(d.decisionId)}</td><td>${esc(t)}</td><td>${esc(ACTION_NAME[d.action])}</td>
         <td class="mono" title="${esc(d.to)}">${esc(short(d.to))}</td><td>${esc(usdt(d.amount))}</td>
-        <td>${verdictPill(d.allowed)}<br><small>${esc(REASON_NAME[d.reason])}</small></td><td>${esc(blockedBy(r))}</td>
+        <td>${verdictPill(d.allowed)}<br><small>${esc(REASON_NAME[d.reason])}</small></td><td>${blockedBy(r)}</td>
         <td><button class="btn small" data-details="${esc(r.txHash)}" data-id="${esc(d.decisionId)}">Inputs</button>
             <button class="btn small primary" data-reeval="${esc(r.txHash)}" data-id="${esc(d.decisionId)}">Re-evaluate</button></td>
       </tr><tr class="detail-row hidden" id="detail-${esc(d.decisionId)}"><td colspan="8"></td></tr>`;
@@ -850,7 +856,7 @@ function decisionDetailHtml(d, circuits) {
     <table class="table"><thead><tr><th>#</th><th>Circuit</th><th>Result</th><th>Inputs packed</th><th>Raw input → output</th></tr></thead><tbody>
     ${circuits
       .map(
-        (c) => `<tr><td>${c.index}</td><td>${esc(KIND_LABEL[c.kind])}</td>
+        (c) => `<tr><td>${c.index}</td><td>${kindTag(c.kind)}</td>
         <td>${c.status === STATUS.ALLOW ? '<span class="pill allow">ALLOW</span>' : `<span class="pill block">${esc(STATUS_NAME[c.status])}</span>`}</td>
         <td>${fieldsHtml(c.kind, c.input)}</td><td class="mono">${esc(c.input)} → ${esc(c.output || '0x')}</td></tr>`,
       )
@@ -895,7 +901,7 @@ function showDecisionResult(rc) {
   box.innerHTML = `<h2>${d.allowed ? 'ALLOWED by your circuits' : 'BLOCKED by your circuits'}</h2>
     <p><strong>This circuit decision is final.</strong> ${d.allowed ? `${esc(usdt(d.amount))} was sent to <span class="mono">${esc(d.to)}</span>.` : 'No funds moved. The transaction succeeded and the blocked decision is on the public record.'}
     Decision #${esc(d.decisionId)}, reason ${esc(REASON_NAME[d.reason])}: ${esc(REASON_TEXT[d.reason])}.</p>
-    <ul>${r.circuits.map((c) => `<li>${esc(KIND_LABEL[c.kind])}: <strong>${esc(STATUS_NAME[c.status])}</strong></li>`).join('')}</ul>
+    <ul>${r.circuits.map((c) => `<li>${kindTag(c.kind)} <strong>${esc(STATUS_NAME[c.status])}</strong></li>`).join('')}</ul>
     <div class="row-actions"><button class="btn small primary" data-reeval="${esc(rc.hash)}" data-id="${esc(d.decisionId)}" data-target="result-reeval">Re-evaluate this decision</button>
     <button class="btn small ghost" id="dismiss-result" type="button">Dismiss</button></div><div id="result-reeval"></div>`;
   show(box);

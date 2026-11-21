@@ -22,12 +22,21 @@
   --muted: #9ba29d;
   --rule: #2b3230;
   --rule-strong: #6b7470; /* form-control lines: ≥3:1 on paper (WCAG 1.4.11) */
-  --accent: #9cbfd0;
-  --accent-ink: #12191c;
-  --allow: #86c49a;
-  --block: #ec917c;
-  --warn: #dcb76a;
+  --accent: #9cb2ff;
+  --accent-ink: #12162b;
+  --hero-wash: #1b1d2b;
+  --allow: #7fd091;
+  --block: #f58d79;
+  --warn: #eabc6e;
   --info: var(--accent);
+
+  /* One colour per rule circuit, used wherever that circuit is named (chips, create form, Edit rules, the band
+     under the top bar). Generated in OKLCH, one hue per circuit. Text colours are ≥7.5:1 on dark paper and
+     ≥4.8:1 on light paper; the washes sit behind chips. */
+  --k1: #d39ef3; --k1-wash: #2a2033; /* Daily Cap: violet */
+  --k2: #65d2d3; --k2-wash: #15292a; /* Payee Whitelist + Cooling-off: teal */
+  --k3: #f893bc; --k3-wash: #301c26; /* Confirmation Threshold: magenta */
+  --k4: #a1c3db; --k4-wash: #1b252d; /* Freeze: ice slate */
 
   --serif: 'Newsreader', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
   --sans: 'Schibsted Grotesk', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -58,11 +67,16 @@
   --muted: #5c6560;
   --rule: #d5d0c6;
   --rule-strong: #857f72;
-  --accent: #2e5266;
-  --accent-ink: #f3f1ec;
-  --allow: #2f6a43;
-  --block: #a3402c;
-  --warn: #855f12;
+  --accent: #3b48c3;
+  --accent-ink: #f6f6ff;
+  --hero-wash: #e9e8f8;
+  --allow: #21763c;
+  --block: #b23a26;
+  --warn: #8f5f02;
+  --k1: #8636af; --k1-wash: #f0e3f8;
+  --k2: #007172; --k2-wash: #d9eeec;
+  --k3: #b82771; --k3-wash: #f9e1ea;
+  --k4: #426882; --k4-wash: #e0e9ef;
 }
 @media (max-width: 640px) { :root { --gutter: 16px; } }
 
@@ -116,7 +130,12 @@ a:hover { color: var(--ink); }
 .topbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap;
   padding: 16px var(--edge);
-  position: sticky; top: 0; z-index: 6; background: var(--paper); border-bottom: 1px solid var(--rule);
+  position: sticky; top: 0; z-index: 6; background: var(--paper);
+}
+/* The four rules as one band under the bar: the page's colour key, always in view. */
+.topbar::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  background: linear-gradient(90deg, var(--k1) 0 25%, var(--k2) 25% 50%, var(--k3) 50% 75%, var(--k4) 75% 100%);
 }
 .brand { font-family: var(--serif); font-size: 1.45rem; font-variation-settings: 'opsz' 30; letter-spacing: -0.01em;
   display: inline-flex; align-items: center; gap: 0.32em; }
@@ -155,7 +174,13 @@ main { padding: 0 var(--edge); }
 .hero {
   display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 48px 80px; align-items: center;
   padding: clamp(48px, 9vh, 104px) 0 clamp(48px, 9vh, 96px);
+  /* Full-bleed wash without moving the content off the shared edges. */
+  background: var(--hero-wash); box-shadow: 0 0 0 100vmax var(--hero-wash); clip-path: inset(0 -100vmax);
 }
+.hero h1 { color: var(--ink); }
+.hero .subtitle { color: var(--accent); }
+.hero input, .hero textarea { border-bottom-color: var(--rule-strong); }
+.rule-key { list-style: none; display: flex; flex-wrap: wrap; gap: 8px 10px; margin: 28px 0 0; padding: 0; }
 .hero h1 {
   font-size: clamp(3.4rem, 8vw, 6rem); line-height: 0.92; letter-spacing: -0.035em; margin: 0 0 28px;
   font-weight: 350; font-variation-settings: 'opsz' 72;
@@ -278,6 +303,7 @@ legend label { font: inherit; letter-spacing: 0; display: inline-flex; align-ite
 .big-number {
   font-family: var(--serif); font-size: clamp(2.8rem, 5vw, 4rem); font-weight: 350; line-height: 1; letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums lining-nums; margin: 0 0 20px; font-variation-settings: 'opsz' 72;
+  color: var(--accent);
 }
 #balance-info { margin-bottom: 24px; }
 #fund-form + small { margin-top: 10px; }
@@ -307,6 +333,30 @@ legend label { font: inherit; letter-spacing: 0; display: inline-flex; align-ite
 .pill.neutral::before { background: transparent; border: 1.5px solid currentColor; }
 .pill.final { color: var(--accent); white-space: normal; }
 .pill.suggest { color: var(--info); }
+
+/* Circuit kind: a tinted chip in that circuit's colour (status marks stay dot + text, so the two never read alike). */
+.k1 { --kc: var(--k1); --kw: var(--k1-wash); }
+.k2 { --kc: var(--k2); --kw: var(--k2-wash); }
+.k3 { --kc: var(--k3); --kw: var(--k3-wash); }
+.k4 { --kc: var(--k4); --kw: var(--k4-wash); }
+.kind {
+  display: inline-flex; align-items: center; gap: 7px; padding: 3px 11px 3px 9px; border-radius: 999px;
+  background: var(--kw, var(--paper-2)); color: var(--kc, var(--ink));
+  font-size: 0.8rem; font-weight: 600; line-height: 1.3; white-space: nowrap;
+}
+.kind::before { content: ''; width: 7px; height: 7px; border-radius: 2px; background: currentColor; flex: none; }
+.table .kind + small { display: inline; margin-left: 6px; }
+
+/* Create form and Edit rules: each rule's controls carry its circuit colour. */
+fieldset:is(.k1, .k2, .k3, .k4) { border-top: 2px solid var(--kc); }
+fieldset:is(.k1, .k2, .k3, .k4) legend { color: var(--kc); }
+fieldset:is(.k1, .k2, .k3, .k4) input[type='checkbox'] { accent-color: var(--kc); }
+fieldset:is(.k1, .k2, .k3, .k4) input:focus { border-bottom-color: var(--kc); box-shadow: 0 1px 0 0 var(--kc); }
+.rule:is(.k1, .k2, .k3, .k4) > label, .rule:is(.k1, .k2, .k3, .k4) > .label { display: inline-flex; align-items: center; gap: 8px; color: var(--kc); }
+.rule:is(.k1, .k2, .k3, .k4) > label::before, .rule:is(.k1, .k2, .k3, .k4) > .label::before {
+  content: ''; width: 8px; height: 8px; border-radius: 2px; background: currentColor; flex: none;
+}
+.rule:is(.k1, .k2, .k3, .k4) input:focus { border-bottom-color: var(--kc); box-shadow: 0 1px 0 0 var(--kc); }
 .pill.suggest::before { background: transparent; border: 1.5px dashed currentColor; }
 
 /* Circuit decision result: a large state icon and a state-coloured heading, not a box. */
