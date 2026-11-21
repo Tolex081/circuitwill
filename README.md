@@ -9,7 +9,8 @@ cost estimate and a passing dry run on a fork of the latest block, is
 Whitelist + Cooling-off, Confirmation Threshold, Freeze), tests (local, plus an optional run against a fork of
 X Layer mainnet) and a static dashboard (`frontend/`, see [Frontend](#frontend-dashboard)) that has run only
 against a local anvil fork. **Nothing has been deployed, verified on an explorer, or taped out on a live network,
-and the dashboard is not hosted anywhere.** The optional [Walrus Memory](#walrus-memory-optional-off-by-default)
+The dashboard is hosted on Vercel at <https://circuitwill.vercel.app/> (static files only), but no
+CircuitWill escrow exists on X Layer for it to open yet.** The optional [Walrus Memory](#walrus-memory-optional-off-by-default)
 suggestions are off by default, outside the payment path, and in the browser run on a clearly labelled local stub:
 **nothing is connected to Walrus.**
 
@@ -370,8 +371,10 @@ estimated 2.31M limit on the anvil rehearsal blocked a payment (Confirmation and
 
 ## Frontend dashboard
 
-`frontend/` is a static page with no build step and no runtime dependencies (ethers 6.13.4 is vendored). It is not
-hosted anywhere yet, and it has only run against a local anvil fork.
+`frontend/` is a static page with no build step and no runtime dependencies (ethers 6.13.4 is vendored). It is hosted
+on Vercel at <https://circuitwill.vercel.app/> (`vercel.json` redirects `/` to `/frontend/`; `.vercelignore` publishes
+only `frontend/` and `circuits/lib/`, without `local-config.json`, `serve.mjs`, `scripts/` or `test/`). It has only
+been exercised against a local anvil fork.
 
 | Card | What it does |
 |---|---|
@@ -540,8 +543,8 @@ Decisions #1 and #2 match the Phase 3 record (same circuits, outcomes, balances 
   labelled as such on the page. The real SDK adapter (`createMemWalAdapter`, `scripts/memory-suggest.mjs`) is
   written against the documented API and tested with a fake client only: the package is not installed here and it
   has never talked to a Walrus relayer. See [Walrus Memory](#walrus-memory-optional-off-by-default).
-- **Dashboard only run locally.** It has been exercised against a local anvil fork only; it is not hosted on DeWEB
-  or anywhere else, and needs a processor and circuit ids that exist on X Layer before it can create a real will.
+- **Dashboard only exercised locally.** It has been exercised against a local anvil fork only. It is hosted on
+  Vercel (<https://circuitwill.vercel.app/>), not on DeWEB, and needs a processor and circuit ids that exist on X Layer before it can create a real will.
 - **One ERC-20 per escrow.** Native OKB is not supported.
 - **TapeOut trust.** TapeOut is unaudited and owner-upgradeable. An upgrade could change `eval`. The escrow records
   the netlist hash and every input/output, but cannot prevent this. See `docs/TAPEOUT_INTERFACE.md`.
