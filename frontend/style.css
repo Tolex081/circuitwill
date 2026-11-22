@@ -581,6 +581,77 @@ details.more[open] > summary { color: var(--ink); margin-bottom: 8px; }
 .activity .st-ok { color: var(--allow); }
 .activity .st-fail { color: var(--block); }
 
+/* ---------- Circuit X-ray: a rule's real NAND netlist re-run on a decision's saved inputs (lib/xray.js) ----------
+   Lit = 1 in the rule's colour, dim = 0. The signal lights left to right by gate depth (--t x --xr-step). */
+.xray-panel { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--rule-strong); }
+.xray-panel > h3 { margin-bottom: 4px; }
+.xray-pick { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+.xray-pick .chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--sans); }
+.xray-pick .chip[aria-pressed='true'] { border-color: var(--ink); background: var(--well); }
+.xray-pick .rule-name { font-size: 0.88rem; }
+.xray-ans { font-size: 0.78rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; }
+.xray-ans.allow { color: var(--allow); }
+.xray-ans.block { color: var(--block); }
+.xray-view { margin-top: 12px; }
+
+.xr { --xr-off: var(--rule-strong); min-width: 0; }
+.xr-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin-bottom: 8px; }
+.xr-match { font-size: 0.84rem; font-weight: 650; padding: 3px 10px; border-radius: 999px; }
+.xr-match.ok { color: var(--allow); background: var(--allow-wash); }
+.xr-match.bad { color: var(--block); background: var(--block-wash); }
+.xr-alert { padding: 10px 14px; border-radius: var(--r-sm); font-size: 0.92rem; border: 1px solid; }
+.xr-alert.bad { color: var(--block); background: var(--block-wash); border-color: var(--block); font-size: 1rem; }
+.xr-alert.warn { color: var(--warn); background: var(--warn-wash); border-color: var(--warn); }
+.xr-caption { max-width: 68ch; }
+.xr-fields { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.9rem; }
+.xr-fk { color: var(--muted); }
+.xr-stages { margin-bottom: 8px; }
+.xr-arrow { margin: 0 6px; color: var(--muted); }
+.xr-tools { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.xr-tools .btn { min-width: 40px; }
+.xr-scroll {
+  overflow: auto; max-height: min(72vh, 720px); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  background: var(--field); overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+}
+.xr-svg { display: block; margin: 0 auto; font-family: var(--sans); }
+.xr-info { margin-top: 8px; min-height: 2.6em; }
+
+.xr-cells rect { fill: var(--kw, var(--well)); opacity: 0.5; }
+.xr-rowlbl text, .xr-const text { fill: var(--muted); font-size: 9px; }
+.xr-head .xr-field { fill: var(--muted); font-size: 9.5px; }
+.xr-head .xr-lane { fill: var(--kc, var(--ink)); font-size: 10.5px; font-weight: 650; }
+.xr-svg .w { stroke: var(--xr-off); stroke-width: 1; opacity: 0.4; }
+.xr-svg .p { fill: var(--field); stroke: var(--xr-off); stroke-width: 1.2; cursor: pointer; }
+.xr-svg .g { fill: var(--paper); stroke: var(--muted); stroke-width: 1; cursor: pointer; }
+.xr-out circle { fill: var(--field); stroke: var(--xr-off); stroke-width: 1.5; }
+.xr-out .xr-bit { fill: var(--muted); font: 700 13px var(--mono); }
+.xr-out .xr-outlbl { fill: var(--muted); font-size: 11px; font-weight: 650; }
+.xr-svg:not(.pre) .w.on { stroke: var(--kc, var(--accent)); stroke-width: 1.4; opacity: 0.95; }
+.xr-svg:not(.pre) .p.on { fill: var(--kc, var(--accent)); stroke: var(--kc, var(--accent)); }
+.xr-svg:not(.pre) .g.on { fill: var(--kc, var(--accent)); stroke: var(--kc, var(--accent)); }
+.xr-svg:not(.pre) .xr-out circle { stroke: var(--block); fill: var(--block-wash); }
+.xr-svg:not(.pre) .xr-out .xr-bit, .xr-svg:not(.pre) .xr-out .xr-outlbl { fill: var(--block); }
+.xr-svg:not(.pre) .xr-out.on circle { stroke: var(--allow); fill: var(--allow-wash); }
+.xr-svg:not(.pre) .xr-out.on .xr-bit, .xr-svg:not(.pre) .xr-out.on .xr-outlbl { fill: var(--allow); }
+.xr-svg .w, .xr-svg .p, .xr-svg .g, .xr-out circle, .xr-out text {
+  transition: stroke 0.22s ease-out, fill 0.22s ease-out, opacity 0.22s ease-out;
+  transition-delay: calc(var(--t, 0) * var(--xr-step, 20ms));
+}
+.xr-svg.pre * { transition: none; }
+.xr-svg.has-sel .w:not(.sel) { opacity: 0.12; }
+.xr-svg.has-sel .g:not(.sel), .xr-svg.has-sel .p:not(.sel) { opacity: 0.45; }
+.xr-svg .sel { opacity: 1; }
+.xr-svg .w.sel { stroke-width: 2.2; }
+.xr-svg .g.sel, .xr-svg .p.sel { stroke: var(--ink); stroke-width: 1.6; }
+.xr-svg.has-sel * { transition-delay: 0s; }
+@media (prefers-reduced-motion: reduce) {
+  .xr-svg * { transition: none !important; }
+}
+@media (max-width: 560px) {
+  .xr-fields { font-size: 0.86rem; gap: 2px 14px; }
+  .xray-pick .chip { padding-block: 6px; }
+}
+
 /* ---------- Walrus Memory (optional, advisory): dashed accent rule so it never reads as a circuit decision ---------- */
 .memory-panel { position: relative; border: 1px dashed var(--accent); border-radius: var(--r-sm); padding: 14px 14px 14px 42px; min-width: 0; font-size: 0.9rem; }
 .memory-panel::before { --icon: var(--i-memory); position: absolute; left: 14px; top: 16px; width: 18px; height: 18px; color: var(--accent); }

@@ -27,6 +27,7 @@ import {
   decodeCircuitInput,
 } from './lib/units.js';
 import { loadDecisionFromTx, reEvaluate, escrowInterface } from './lib/reeval.js';
+import { buildXray, decodeNetlist, mountXray } from './lib/xray.js';
 
 const CHAIN_ID = 196n;
 const DEFAULTS = {
@@ -1182,7 +1183,10 @@ function parseDecisionLogs(logs) {
         reason: Number(p.args.reason), memo: p.args.memo, recordHash: p.args.recordHash,
       };
     } else {
-      rec.circuits.push({ index: Number(p.args.index), kind: Number(p.args.kind), status: Number(p.args.status), input: p.args.input, output: p.args.output });
+      rec.circuits.push({
+        index: Number(p.args.index), kind: Number(p.args.kind), status: Number(p.args.status), input: p.args.input, output: p.args.output,
+        processor: p.args.processor, circuitId: p.args.circuitId, netlistHash: p.args.netlistHash,
+      });
     }
     byId.set(id, rec);
   }
@@ -1347,8 +1351,10 @@ function decisionBodyHtml(rec) {
     <p class="small-text" style="margin-top:12px">Asked by ${esc(whoText(d.proposer))} · ${esc(utcTime(rec.time))} · decision #${esc(d.decisionId)}${d.memo ? ` · Note: ${esc(d.memo)}` : ''}</p>
     <div class="row-actions">
       <button class="btn small" type="button" data-reeval="${esc(rec.txHash)}" data-id="${esc(d.decisionId)}" data-target="reeval-${esc(d.decisionId)}">Verify this decision</button>
+      ${rec.circuits.length ? `<button class="btn small ghost" type="button" data-xray="${esc(d.decisionId)}" aria-expanded="false" aria-controls="xray-${esc(d.decisionId)}">See the circuits work</button>` : ''}
     </div>
     <div id="reeval-${esc(d.decisionId)}"></div>
+    <div id="xray-${esc(d.decisionId)}" class="xray-panel hidden"></div>
     <details class="more tech"><summary>Technical details</summary>${decisionDetailHtml(d, rec.circuits)}</details>`;
 }
 
@@ -1412,6 +1418,80 @@ async function runReevaluate(txHash, decisionId, target) {
   } catch (e) {
     target.innerHTML = `<p class="error">${esc(errorText(e))}</p>`;
     log.fail(errorText(e));
+  }
+}
+
+// ------------------------------------------------------------------ Circuit X-ray (explains a recorded decision)
+
+const NETLIST_ABI = [
+  'function netlist(uint256 id) view returns (bytes)',
+  'function circuitInfo(uint256 id) view returns (uint32 nIn, uint32 nOut, uint32 nState, uint32 gateCount)',
+];
+const netlistCache = new Map();
+
+/// Reads a circuit's netlist and pin counts from its TapeOut processor (view calls only), once per page.
+function loadNetlist(processor, circuitId) {
+  const key = `${processor.toLowerCase()}:${circuitId}`;
+  if (!netlistCache.has(key)) {
+    const proc = new ethers.Contract(processor, NETLIST_ABI, state.read);
+    const p = Promise.all([proc.netlist(circuitId), proc.circuitInfo(circuitId)]).then(([netlist, info]) => ({
+      netlist,
+      hash: ethers.keccak256(netlist),
+      gates: decodeNetlist(netlist),
+      nIn: Number(info.nIn),
+      nOut: Number(info.nOut),
+    }));
+    p.catch(() => netlistCache.delete(key));
+    netlistCache.set(key, p);
+  }
+  return netlistCache.get(key);
+}
+
+/// The X-ray panel of one History row: a picker with one entry per evaluated rule, and the drawing below it.
+async function toggleXray(btn) {
+  const id = btn.dataset.xray;
+  const panel = $(`xray-${id}`);
+  const open = panel.classList.contains('hidden');
+  show(panel, open);
+  btn.setAttribute('aria-expanded', String(open));
+  if (!open || panel.innerHTML) return;
+  const rec = state.decisions.find((r) => r.decision.decisionId.toString() === id);
+  const first = rec.circuits.find((c) => c.status !== STATUS.ALLOW) ?? rec.circuits[0];
+  panel.innerHTML = `<h3>Inside the circuits</h3>
+    <p class="small-text">Each rule is a real circuit of NAND gates on X Layer. Here it is re-run on the exact inputs saved with this decision, gate by gate, to show how it reached its answer. This only explains: the saved decision is final.</p>
+    <div class="xray-pick" role="group" aria-label="Rule">${rec.circuits
+      .map((c) => {
+        const ok = c.status === STATUS.ALLOW;
+        return `<button class="chip" type="button" data-xray-show="${esc(id)}" data-index="${c.index}" aria-pressed="${c === first}">${kindTag(c.kind)}<span class="xray-ans ${ok ? 'allow' : 'block'}">${ok ? 'yes' : 'no'}</span></button>`;
+      })
+      .join('')}</div>
+    <div class="xray-view" id="xray-view-${esc(id)}"></div>`;
+  await showXray(id, first.index);
+}
+
+async function showXray(id, index) {
+  const rec = state.decisions.find((r) => r.decision.decisionId.toString() === id);
+  const c = rec.circuits.find((x) => x.index === index);
+  const view = $(`xray-view-${id}`);
+  for (const b of document.querySelectorAll(`[data-xray-show="${id}"]`)) b.setAttribute('aria-pressed', String(Number(b.dataset.index) === index));
+  const ruleName = RULE[c.kind]?.name ?? KIND_LABEL[c.kind] ?? `Circuit ${c.circuitId}`;
+  view.dataset.want = String(index); // a slower earlier pick must not overwrite a later one
+  if (c.status === STATUS.NOT_EVALUATED || c.input === '0x') {
+    view.innerHTML = `<p class="muted">${esc(ruleName)} didn’t run for this payment (the amount was too large for the circuits), so there is nothing to show.</p>`;
+    return;
+  }
+  view.innerHTML = '<p class="muted">Reading the circuit from the chain…</p>';
+  try {
+    await ensureRead();
+    const net = await loadNetlist(c.processor, c.circuitId);
+    if (view.dataset.want !== String(index)) return;
+    const recorded = c.status === STATUS.ALLOW || c.status === STATUS.DENY ? c.output : null;
+    const model = buildXray({ gates: net.gates, nIn: net.nIn, nOut: net.nOut, input: c.input, kind: c.kind, recordedOutput: recorded });
+    const statusNote =
+      recorded == null ? `This rule’s run was recorded as ${STATUS_NAME[c.status]} (it could not finish), which blocked the payment to be safe. The drawing shows what the gates give on the saved inputs.` : '';
+    mountXray(view, model, { ruleName, ruleClass: RULE[c.kind]?.cls ?? '', netlistOk: net.hash === c.netlistHash, statusNote });
+  } catch (e) {
+    view.innerHTML = `<p class="error">Couldn’t draw this circuit: ${esc(errorText(e))}</p>`;
   }
 }
 
@@ -1866,6 +1946,8 @@ function bind() {
       const target = $(b.dataset.target);
       return guard(b, () => runReevaluate(b.dataset.reeval, BigInt(b.dataset.id), target));
     }
+    if (b.dataset.xray) return toggleXray(b);
+    if (b.dataset.xrayShow) return showXray(b.dataset.xrayShow, Number(b.dataset.index));
   });
 }
 

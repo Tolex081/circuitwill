@@ -387,7 +387,7 @@ The page is built for first-time users: plain language first, contract details o
 | Overview | Balance and **Add money** (a plain USDT0 `transfer`), spent today against the daily limit with time to reset, the rules in force as sentences, recent payments |
 | Send | `proposePayment(to, amount, memo)` for the owner or the active agent, with trusted recipients as one-click chips. Above the approval amount it says the owner must approve this exact payment, and gives the owner an **Approve this payment** button (`confirmPayment`). **Withdraw** for the owner. The result says *Payment sent* or *Payment blocked* and, per rule, why, read from the recorded circuit inputs (for example "Today's spending would reach 60 USDT0, over the 50 USDT0 daily limit"). A blocked payment keeps its details so it can be approved and sent again |
 | Rules | One card per rule: on/off, the setting as a sentence, change it, turn it on (`attachCircuit` from the official set) or off (`detachCircuit`). Trusted recipients (trust, stop trusting, remove, add), approvals for one exact `(to, amount)` (approve, cancel, check), freeze/unfreeze, AI helper (add, change, remove). Owner only; others see the rules read-only |
-| History | Every `Decision` (from the `from` block, or the last 10,000 blocks) as *Sent* / *Blocked* with a one-line reason; expand for each rule's answer, **Verify this decision** (re-evaluation) and the technical record |
+| History | Every `Decision` (from the `from` block, or the last 10,000 blocks) as *Sent* / *Blocked* with a one-line reason; expand for each rule's answer, **Verify this decision** (re-evaluation), **See the circuits work** (Circuit X-ray, below) and the technical record |
 | Advanced | Contract addresses, attached circuits with processor, id and netlist hash, attach a custom circuit, `evalGasLimit`, and the transaction log with gas |
 | Footer | "Circuits make the final decision", **Verify any decision** by transaction hash (any escrow), **Network settings** |
 
@@ -410,6 +410,26 @@ Rules the page follows:
   `allowed` and `spentTodayAfter` follow from the circuit statuses, and recomputes `recordHash` (compared with the
   event and with `decisionRecordHash(decisionId)`). REVERTED or MALFORMED_OUTPUT circuits are reported as not
   replayable. A mismatch is reported; nothing is written.
+
+**Circuit X-ray.** In an expanded History row, **See the circuits work** shows one picker entry per rule that was
+evaluated (the blocking one first). For the chosen rule it reads `netlist(circuitId)` and `circuitInfo(circuitId)` from
+the recorded processor (view calls), checks `keccak256(netlist)` against the recorded `netlistHash`, and re-runs the
+netlist in the browser on the recorded `CircuitEvaluated` input bytes, with the same TAP-02 NAND semantics as
+`circuits/lib/tap02.mjs`. It then draws every gate: input bits on the left (labelled amount, spent today, daily limit
+and so on; the field boundaries are derived from `decodeCircuitInput`), one bit position per row, stages as lanes
+(Daily Cap: *Add* 285 gates → *Compare* 161 → *Result*), and the output bit on the right. Lit wires and gates are 1,
+dim ones are 0; the signal lights up left to right by gate depth (instant with `prefers-reduced-motion`). Tap a gate
+or input dot to see its inputs and output; zoom with − / Fit / +. A plain-English caption explains the stages with
+the recorded values. If the computed bit differs from the recorded output the panel says **Mismatch** in red; if the
+netlist hash differs it warns that the circuit changed. It only explains: the recorded decision is final. The drawing
+lives in `frontend/lib/xray.js` (`buildXray` from netlist + input bytes, `mountXray` to draw), so it can be reused on
+other inputs; `test/xray.test.mjs` checks it against `tap02.mjs` on all four circuits.
+
+*Verified on 2026-11-22* in the in-app browser on the local anvil fork (block 76,350,000; all transactions local): a
+new will (cap 50, trial limit 5 / 24 h, threshold 20, freeze) funded with 100 USDT0 recorded #1 10 USDT0 to a trusted
+payee (allowed), #2 60 USDT0 to a new address (blocked by Daily Cap, Whitelist and Confirmation), #3 1 USDT0 (allowed)
+and #4 1 USDT0 while frozen (blocked by Freeze). All 16 X-rays (4 decisions × 4 circuits: 447, 237, 160 and 1 NAND)
+computed the recorded output bit, with no netlist-hash warning, on desktop and at 375 px, in dark and light themes.
 
 **Run it against a local anvil fork** (three terminals, from the repository root):
 
