@@ -3,7 +3,7 @@
 // The choice is kept per browser in localStorage; if storage is blocked the page stays dark.
 (function () {
   var KEY = 'circuitwill:theme:v1';
-  var PAPER = { light: '#f3f1ec', dark: '#151918' }; // matches --paper in style.css
+  var PAPER = { light: '#ebe8e1', dark: '#111514' }; // matches --field in style.css
   var root = document.documentElement;
 
   function read() {

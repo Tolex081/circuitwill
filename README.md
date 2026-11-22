@@ -43,7 +43,7 @@ contracts/                        Foundry
                                   rehearse-anvil.ps1 (local anvil rehearsal of both),
                                   dryrun-anvil.ps1 (the mainnet runbook replayed on a local fork of the latest block)
 frontend/                         static dashboard, no build step (see "Frontend dashboard")
-  index.html, app.js, style.css   the page: connect, create/open, rules, payments, decisions, re-evaluation
+  index.html, app.js, style.css   the page: welcome, create wizard, overview, send, rules, history, advanced
   lib/reeval.js                   read-only re-evaluation of a decision (shared by the page and the CLI)
   lib/units.js, lib/meta.js       USDT0 parsing with uint32/uint16 limits, input decoding, enum labels
   lib/memory-pref.js              Walrus Memory on/off flag per wallet (localStorage, default off)
@@ -376,24 +376,31 @@ on Vercel at <https://circuitwill.vercel.app/> (`vercel.json` redirects `/` to `
 only `frontend/` and `circuits/lib/`, without `local-config.json`, `serve.mjs`, `scripts/` or `test/`). It has only
 been exercised against a local anvil fork.
 
-| Card | What it does |
+The page is built for first-time users: plain language first, contract details on request.
+
+| Screen / tab | What it does |
 |---|---|
-| Connect | A browser wallet (EIP-1193, switched to chain 196). Without a wallet the page is read-only: `?escrow=<address>&from=<block>` opens any will. The network is chosen automatically and shown as a badge (see "Network" below); the network choice and developer mode sit in a collapsed **Advanced: network** section |
-| Create | Deploys `CircuitWillKey` (or reuses one), mints the controller NFT to your wallet, deploys `CircuitWillEscrow`, sets each circuit's parameters, then attaches it (same order as `Deploy.s.sol`), then sets the agent. One transaction per step |
-| This CircuitWill / Balance | Escrow, controller NFT and its owner, agent (active or not), USDT0 balance, spent today (`currentSpentToday`) against the cap, frozen. **Fund** is a plain USDT0 `transfer` |
-| Propose payment | `proposePayment(to, amount, memo)` for the controller or the active agent; **Withdraw** for the controller. The result banner shows the recorded `Decision` and each circuit's status |
-| Active rules / Edit rules | Attached circuits with the parameters in force, attach/detach, daily cap, trial limit, cooling-off, confirmation threshold, agent, `evalGasLimit`, freeze/unfreeze, payees (add, save/unsave, remove) and `confirmPayment` / `revokeConfirmation` for one exact `(to, amount)` |
-| Recent decisions | `Decision` + `CircuitEvaluated` logs of the escrow (from the `from` block, or the last 10,000 blocks), with the packed inputs decoded per circuit and a **Re-evaluate** button |
-| Re-evaluate any decision | Same check from a transaction hash, for decisions of any escrow |
+| Welcome | What a CircuitWill is, an example will (labelled "Example"), how it works in three steps, and common questions (who can change rules, the key, the AI helper). **Connect wallet**, or **View a CircuitWill** without a wallet (`?escrow=<address>&from=<block>` also opens any will read-only). The network is chosen automatically and shown in the top bar; the network choice and developer mode sit under **Network settings** in the footer |
+| Start | **Create a CircuitWill**, open one by address, or reopen one this browser opened before (kept in `localStorage`, a convenience only) |
+| Create (3 steps) | 1. Rules as sentences with switches ("Up to [50] USDT0 can leave per day"). 2. Optional AI helper (agent). 3. Review, the number of wallet approvals, and a live checklist while it runs. It deploys `CircuitWillKey` (or reuses one), mints the key NFT to your wallet, deploys `CircuitWillEscrow`, sets each circuit's parameters, then attaches it (same order as `Deploy.s.sol`), then sets the agent. Processor and circuit ids come from the official set (`OFFICIAL` in `app.js`, empty until the mainnet tapeout) or `local-config.json`; otherwise they are entered under **Advanced: token and circuits** |
+| Header | Will address, your role (**Owner**, **AI helper** or **View only**) with what that role can do, and a banner with **Unfreeze** while frozen |
+| Overview | Balance and **Add money** (a plain USDT0 `transfer`), spent today against the daily limit with time to reset, the rules in force as sentences, recent payments |
+| Send | `proposePayment(to, amount, memo)` for the owner or the active agent, with trusted recipients as one-click chips. Above the approval amount it says the owner must approve this exact payment, and gives the owner an **Approve this payment** button (`confirmPayment`). **Withdraw** for the owner. The result says *Payment sent* or *Payment blocked* and, per rule, why, read from the recorded circuit inputs (for example "Today's spending would reach 60 USDT0, over the 50 USDT0 daily limit"). A blocked payment keeps its details so it can be approved and sent again |
+| Rules | One card per rule: on/off, the setting as a sentence, change it, turn it on (`attachCircuit` from the official set) or off (`detachCircuit`). Trusted recipients (trust, stop trusting, remove, add), approvals for one exact `(to, amount)` (approve, cancel, check), freeze/unfreeze, AI helper (add, change, remove). Owner only; others see the rules read-only |
+| History | Every `Decision` (from the `from` block, or the last 10,000 blocks) as *Sent* / *Blocked* with a one-line reason; expand for each rule's answer, **Verify this decision** (re-evaluation) and the technical record |
+| Advanced | Contract addresses, attached circuits with processor, id and netlist hash, attach a custom circuit, `evalGasLimit`, and the transaction log with gas |
+| Footer | "Circuits make the final decision", **Verify any decision** by transaction hash (any escrow), **Network settings** |
 
 Rules the page follows:
 
-- **It never decides.** Allowed/blocked comes only from the escrow's `Decision` event, always labelled "circuit
-  decision · final". There is no preview, override, retry-until-allowed or memory input. Optional Walrus Memory
+- **It never decides.** Allowed/blocked comes only from the escrow's `Decision` event, and the page says the answer
+  is final. There is no preview, override, retry-until-allowed or memory input. The per-rule explanations are read
+  from the inputs the escrow recorded for that decision. The "needs approval" note on the Send tab only compares the
+  typed amount with the approval amount and points to the approval step; the circuit still decides. Optional Walrus Memory
   hints are display-only text beside the form (see [Walrus Memory](#walrus-memory-optional-off-by-default)).
 - **Gas from `eth_estimateGas`.** Every transaction is sent with the estimate + 10%. Because an underfunded eval
   reverts with `InsufficientGas` instead of being recorded, the estimate is enough for every circuit; extra gas
-  cannot change an outcome (each eval is capped at `evalGasLimit`). A revert is shown with its decoded error name.
+  cannot change an outcome (each eval is capped at `evalGasLimit`). A revert is shown in plain words (for example `NotController`: "Only the owner of this CircuitWill … can do this"); the transaction log in Advanced keeps the details.
 - **Limits enforced before sending.** USDT0 amounts are parsed as exact 6-decimal values (no floating point) and
   rejected above 4,294.967295 USDT0 (`2^32-1` base units). Cooling-off ≤ 65535 h, `evalGasLimit` 100,000 to
   30,000,000, memo ≤ 256 UTF-8 bytes.
@@ -422,8 +429,8 @@ node frontend/serve.mjs
 CPU, mints 845 NAND, tapes out the four circuits with `script/TapeOutCircuit.s.sol`, gives two fresh addresses
 (owner, agent) OKB for gas and the owner 500 USDT0 (storage writes, test only), and writes their addresses and the
 circuit ids to `frontend/local-config.json` (git-ignored, no keys). It does not create a will. Open
-`http://127.0.0.1:5173/frontend/`: the page picks the local test network by itself. Under **Advanced: network**, act
-as the owner with **Use test account**, then use **Create**.
+`http://127.0.0.1:5173/frontend/`: the page picks the local test network by itself. Press **Use the test owner account** on the welcome screen (or
+pick another account under **Network settings** in the footer), then **Create a CircuitWill**.
 
 **Network.** Users never have to type a server address. The page reads from:
 
@@ -497,7 +504,7 @@ backend, and shipping or typing that key into it would expose it, so the dashboa
 | `createStubAdapter` | browser dashboard | **STUB.** It stores memories in this browser's `localStorage`, scoped to the connected wallet and escrow. The page says "STUB … Not connected to Walrus" in the panel. |
 | `createMemWalAdapter(MemWal, { key, accountId, serverUrl })` | agent side (Node), `frontend/scripts/memory-suggest.mjs <payee> [--note "…"]` | Written against the documented API and unit-tested with a fake `MemWal` class. **Not connected:** the package is not installed in this repository, there are no credentials, and it has never called a relayer. To use it, `npm install @mysten-incubation/memwal` and set `MEMWAL_PRIVATE_KEY`, `MEMWAL_ACCOUNT_ID` and optionally `MEMWAL_SERVER_URL` in the environment, never in a file. The script prints text hints only and has no wallet, RPC or contract access. |
 
-**Using it.** Connect a wallet, open a will, and tick **Walrus Memory suggestions** on the Propose payment card. The
+**Using it.** Connect a wallet, open a will, and tick **Show suggestions from Walrus Memory** on the Send tab. The
 setting is stored per wallet in this browser (`localStorage` key `circuitwill:walrus-memory:v1:<address>`) and is off
 for any wallet that has not turned it on. A blue, dashed panel labelled "Suggestion · from memory · non-binding"
 appears beside the form. It reads "Suggestion based on past behaviour. Your circuits make the final decision." and
