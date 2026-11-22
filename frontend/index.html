@@ -302,6 +302,23 @@
                   <input id="p-memo" maxlength="256" autocomplete="off" />
                 </div>
                 <div id="approval-hint" class="approval-hint hidden"></div>
+                <!-- Payment preview: worked out in this browser from the will's current state and its own circuits.
+                     Explanation only: it never blocks the Send button, and the chain decides when the payment is sent. -->
+                <section id="pay-preview" class="pay-preview hidden" aria-labelledby="pp-title">
+                  <header class="pp-head">
+                    <span class="pp-tag" id="pp-title">Preview</span>
+                    <span class="pp-sub">Not sent yet. The blockchain makes the final decision when you send.</span>
+                  </header>
+                  <p id="pp-verdict" class="pp-verdict" aria-live="polite"></p>
+                  <div id="pp-approve" class="pp-approve"></div>
+                  <ul id="pp-rules" class="why-list pp-rules"></ul>
+                  <div id="pp-figures" class="pp-figures"></div>
+                  <p id="pp-note" class="pp-note small-text"></p>
+                  <div class="pp-actions">
+                    <button class="btn small" type="button" id="pp-xray-btn" aria-expanded="false" aria-controls="pp-xray">See the circuits</button>
+                  </div>
+                  <div id="pp-xray" class="pp-xray hidden"></div>
+                </section>
                 <div>
                   <button class="btn primary big" type="submit">Send payment</button>
                   <p class="small-text final-line">Your circuits check this payment on X Layer. Their answer is final.</p>

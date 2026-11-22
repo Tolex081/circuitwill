@@ -46,6 +46,8 @@ frontend/                         static dashboard, no build step (see "Frontend
   index.html, app.js, style.css   the page: welcome, create wizard, overview, send, rules, history, advanced
   lib/reeval.js                   read-only re-evaluation of a decision (shared by the page and the CLI)
   lib/units.js, lib/meta.js       USDT0 parsing with uint32/uint16 limits, input decoding, enum labels
+  lib/xray.js                     Circuit X-ray: runs a netlist in the browser and draws every NAND gate
+  lib/preview.js                  payment preview: escrow input packing and time rules, simulation, wording
   lib/memory-pref.js              Walrus Memory on/off flag per wallet (localStorage, default off)
   lib/memory.js                   optional advisory memory hints: stub + SDK adapters, panel (loaded only when on)
   artifacts.js                    ABI + bytecode of CircuitWillEscrow / CircuitWillKey, generated from contracts/out
@@ -385,7 +387,7 @@ The page is built for first-time users: plain language first, contract details o
 | Create (3 steps) | 1. Rules as sentences with switches ("Up to [50] USDT0 can leave per day"). 2. Optional AI helper (agent). 3. Review, the number of wallet approvals, and a live checklist while it runs. It deploys `CircuitWillKey` (or reuses one), mints the key NFT to your wallet, deploys `CircuitWillEscrow`, sets each circuit's parameters, then attaches it (same order as `Deploy.s.sol`), then sets the agent. Processor and circuit ids come from the official set (`OFFICIAL` in `app.js`, empty until the mainnet tapeout) or `local-config.json`; otherwise they are entered under **Advanced: token and circuits** |
 | Header | Will address, your role (**Owner**, **AI helper** or **View only**) with what that role can do, and a banner with **Unfreeze** while frozen |
 | Overview | Balance and **Add money** (a plain USDT0 `transfer`), spent today against the daily limit with time to reset, the rules in force as sentences, recent payments |
-| Send | `proposePayment(to, amount, memo)` for the owner or the active agent, with trusted recipients as one-click chips. Above the approval amount it says the owner must approve this exact payment, and gives the owner an **Approve this payment** button (`confirmPayment`). **Withdraw** for the owner. The result says *Payment sent* or *Payment blocked* and, per rule, why, read from the recorded circuit inputs (for example "Today's spending would reach 60 USDT0, over the 50 USDT0 daily limit"). A blocked payment keeps its details so it can be approved and sent again |
+| Send | `proposePayment(to, amount, memo)` for the owner or the active agent, with trusted recipients as one-click chips. While you type, a **Preview** card shows what each rule would answer, today's spending and the balance after the payment, and one verdict line (see [Payment preview](#frontend-dashboard) below). Above the approval amount it says the owner must approve this exact payment, and gives the owner an **Approve this payment** button (`confirmPayment`). **Withdraw** for the owner. The result says *Payment sent* or *Payment blocked* and, per rule, why, read from the recorded circuit inputs (for example "Today's spending would reach 60 USDT0, over the 50 USDT0 daily limit"). A blocked payment keeps its details so it can be approved and sent again |
 | Rules | One card per rule: on/off, the setting as a sentence, change it, turn it on (`attachCircuit` from the official set) or off (`detachCircuit`). Trusted recipients (trust, stop trusting, remove, add), approvals for one exact `(to, amount)` (approve, cancel, check), freeze/unfreeze, AI helper (add, change, remove). Owner only; others see the rules read-only |
 | History | Every `Decision` (from the `from` block, or the last 10,000 blocks) as *Sent* / *Blocked* with a one-line reason; expand for each rule's answer, **Verify this decision** (re-evaluation), **See the circuits work** (Circuit X-ray, below) and the technical record |
 | Advanced | Contract addresses, attached circuits with processor, id and netlist hash, attach a custom circuit, `evalGasLimit`, and the transaction log with gas |
@@ -394,8 +396,10 @@ The page is built for first-time users: plain language first, contract details o
 Rules the page follows:
 
 - **It never decides.** Allowed/blocked comes only from the escrow's `Decision` event, and the page says the answer
-  is final. There is no preview, override, retry-until-allowed or memory input. The per-rule explanations are read
-  from the inputs the escrow recorded for that decision. The "needs approval" note on the Send tab only compares the
+  is final. There is no override, retry-until-allowed or memory input. The per-rule explanations of a decision are
+  read from the inputs the escrow recorded for it. The payment preview on the Send tab is labelled **Preview** ("the
+  blockchain makes the final decision when you send"), never disables **Send payment**, and is never shown as the
+  result: after sending, the recorded decision is. The "needs approval" note on the Send tab only compares the
   typed amount with the approval amount and points to the approval step; the circuit still decides. Optional Walrus Memory
   hints are display-only text beside the form (see [Walrus Memory](#walrus-memory-optional-off-by-default)).
 - **Gas from `eth_estimateGas`.** Every transaction is sent with the estimate + 10%. Because an underfunded eval
@@ -424,6 +428,56 @@ the recorded values. If the computed bit differs from the recorded output the pa
 netlist hash differs it warns that the circuit changed. It only explains: the recorded decision is final. The drawing
 lives in `frontend/lib/xray.js` (`buildXray` from netlist + input bytes, `mountXray` to draw), so it can be reused on
 other inputs; `test/xray.test.mjs` checks it against `tap02.mjs` on all four circuits.
+
+**Payment preview.** On the Send tab, for the owner or the active AI helper, once the recipient and amount are valid
+(400 ms after the last keystroke), the page works out what the will's circuits would answer, without a transaction or
+a wallet prompt. It reads the escrow with view calls only (`circuits`, `spentToday`, `lastResetDay`, `dailyCap`,
+`payees(to)`, `trialLimit`, `coolingOffHours`, `confirmationThreshold`, `currentPaymentHash` → `confirmations`,
+`controller`, `frozen`, `balance`) and builds each circuit's input bytes the way `_execute` / `_evaluate` do
+(`frontend/lib/preview.js`): spent today resets to 0 when the UTC day (`timestamp / 86400`) differs from
+`lastResetDay`; payee age is whole hours `(now - firstSeen) / 3600`, 0 for an unknown payee, capped at 65535; a
+confirmation counts while `now <= expiresAt` and only if given by the current controller; the packing is bit for bit
+that of `contracts/src/libraries/*Packing.sol`, and a value that does not fit gives NOT_EVALUATED. `now` is the
+pending block's timestamp when the node reports one (anvil does; its clock can differ from this computer's), otherwise
+the latest block's. Each circuit's netlist is read from its processor (`netlist`, `circuitInfo`), checked against the
+attached `netlistHash` (a mismatch makes that rule and the verdict "can't preview"), and run in the browser with the
+X-ray evaluator. Statuses combine like `_worse`, then the balance check. The card shows:
+
+- one line per rule: *Would pass* / *Would block* with the reason in the History wording ("Today's spending would
+  reach 52 USDT0, over the 50 USDT0 daily limit (37 already spent).");
+- today's spending after the payment against the daily limit ("37 of 50 USDT0 used today after this payment", or
+  "Today stays at …" when it would be blocked) with a meter, and the money left in the will;
+- one verdict line ("This payment would be blocked: above 20 USDT0 it needs your approval first."). When the Approval
+  rule is the only blocker the owner gets the same **Approve this payment** button as before (the AI helper is told to
+  ask the owner), and after approving the preview turns to *would go through*;
+- notes when a new UTC day has started, or when midnight, the end of a recipient's waiting time or an approval's
+  expiry is under 2 minutes away (the answer may change by the time you send);
+- **See the circuits**: the Circuit X-ray on the simulated inputs, one picker entry per rule, worded "would be".
+
+It refreshes on every edit, after each refresh of the will (for example after sending or approving), and every 30 s
+while the Send tab is open. Viewers see no preview. `test/preview.test.mjs` checks the packing against the README
+pinout tables pin by pin and against the circuit builders' `pack*Inputs`, the day rollover and hour rounding at
+their boundaries, the confirmation rules, and the simulated answers on the real netlists against each circuit's
+formula.
+
+*Verified on 2026-11-22* on the local anvil fork, owner and AI helper, comparing the preview's verdict, each rule's
+answer and each circuit's input bytes with the `CircuitEvaluated` logs of the decision recorded after pressing Send:
+
+| Decision | Case | Preview | Recorded | Input bytes |
+|---|---|---|---|---|
+| #7 | frozen, 1 USDT0 to a trusted payee | blocked: frozen | blocked (Freeze DENY) | identical |
+| #8 | 1 USDT0 to a trusted payee | would go through, 12 of 50 used, 88 left | allowed, spent 12 | identical |
+| #9 | 25 USDT0, above the 20 USDT0 approval amount | blocked: needs your approval (Approve offered) | blocked (Confirmation DENY) | identical |
+| #10 | same, after **Approve this payment** in the preview | would go through, 37 of 50 | allowed, spent 37 | identical |
+| #11 | 15 USDT0 with 37 spent | blocked: today's spending to 52, over 50 | blocked (Daily Cap DENY) | identical |
+| #13 | 3 USDT0 to an address not on the list | blocked: not on your list yet | blocked (Whitelist DENY) | identical |
+| #14 | 3.5 USDT0 to a payee added exactly 24 h earlier, next UTC day | would go through, new day note, 3.5 of 50 | allowed, spent 3.5 | identical |
+| #15 | 2 USDT0 to a payee added 23 h 58 min earlier | blocked: added 23 h ago, close-call note | blocked (Whitelist DENY) | identical |
+| #16 | AI helper, 25 USDT0 | blocked: needs the owner's approval | blocked (Confirmation DENY) | identical |
+| #17 | AI helper, 2 USDT0 | would go through | allowed | identical |
+
+(#12 was a test-harness timing slip, not a preview error. #14 and #15 used `evm_increaseTime`.) Also checked at 375 px
+and in both themes.
 
 *Verified on 2026-11-22* in the in-app browser on the local anvil fork (block 76,350,000; all transactions local): a
 new will (cap 50, trial limit 5 / 24 h, threshold 20, freeze) funded with 100 USDT0 recorded #1 10 USDT0 to a trusted

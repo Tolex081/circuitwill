@@ -28,6 +28,7 @@ import {
 } from './lib/units.js';
 import { loadDecisionFromTx, reEvaluate, escrowInterface } from './lib/reeval.js';
 import { buildXray, decodeNetlist, mountXray } from './lib/xray.js';
+import { buildContext, simulate, closeCalls, explainPreview, verdictFor, shortReasonFor } from './lib/preview.js';
 
 const CHAIN_ID = 196n;
 const DEFAULTS = {
@@ -541,6 +542,7 @@ function closeEscrow() {
   updateUrl();
   syncMemory();
   show('decision-result', false);
+  hidePreview();
   showScreen(state.signer ? 'start' : 'welcome');
   renderNetwork();
 }
@@ -1264,25 +1266,9 @@ function decisionSummary(rec) {
 }
 
 /// A few words for why one circuit said no. The full sentence is in explainCircuit().
+/// The words live in lib/preview.js so the payment preview uses exactly the same ones.
 function shortReason(c) {
-  if (c.status === STATUS.NOT_EVALUATED) return 'amount too large';
-  if (c.status === STATUS.REVERTED || c.status === STATUS.MALFORMED_OUTPUT) return 'couldn’t run';
-  const f = decodeCircuitInput(c.kind, c.input);
-  switch (c.kind) {
-    case KIND.DAILY_CAP:
-      return 'over today’s limit';
-    case KIND.WHITELIST:
-      if (!f) return 'said no';
-      if (f.amount > f.trialLimit) return f.trialLimit === 0n ? 'not a trusted recipient' : 'more than a new recipient can get';
-      if (f.ageHours === 0n) return 'not on your list yet';
-      return 'added too recently';
-    case KIND.CONFIRMATION:
-      return 'not approved';
-    case KIND.FREEZE:
-      return 'frozen';
-    default:
-      return 'said no';
-  }
+  return shortReasonFor({ kind: c.kind, status: c.status, fields: decodeCircuitInput(c.kind, c.input) });
 }
 
 function reasonText(reason) {
@@ -1535,6 +1521,13 @@ async function confirmationStatus(to, amount) {
 async function updateApprovalBox() {
   const box = $('approval-hint');
   const i = state.info;
+  // While the payment preview is showing, it carries the approval step itself (with the same button).
+  schedulePreview();
+  if (state.preview?.active) {
+    box.innerHTML = '';
+    show(box, false);
+    return;
+  }
   let to = null;
   let amount = null;
   try {
@@ -1561,7 +1554,7 @@ async function updateApprovalBox() {
   } catch {
     /* read failed; show the plain note */
   }
-  if (token !== updateApprovalBox.token) return;
+  if (token !== updateApprovalBox.token || state.preview?.active) return;
   box.classList.toggle('approved', !!st?.confirmed);
   if (st?.confirmed) {
     box.innerHTML = `<p><strong>Approved.</strong> The owner approved ${esc(money(amount))} USDT0 to ${esc(short(to))}, valid until ${esc(utcTime(st.expiresAt))}. You can send it now.</p>`;
@@ -1569,6 +1562,232 @@ async function updateApprovalBox() {
     box.innerHTML = head + (owner ? '<p><button class="btn small primary" type="button" id="approve-inline-btn">Approve this payment</button></p>' : '<p>Ask the owner to approve it in the Rules tab.</p>');
   }
   show(box);
+}
+
+// ------------------------------------------------------------------ payment preview (explains, never decides)
+//
+// As the owner or the AI helper types a recipient and an amount, the page reads the will's current state (view calls
+// only), packs each attached circuit's input bytes exactly as the escrow would (lib/preview.js), and runs the will's
+// own netlists in the browser. It is labelled as a preview, never disables Send, and the decision recorded on chain
+// after sending is the answer that counts.
+
+const PREVIEW_DEBOUNCE_MS = 400;
+const PREVIEW_TICK_MS = 30000; // time-based rules (waiting time, midnight, approval expiry) can change while it shows
+
+function previewForm() {
+  try {
+    return { to: parseAddress($('p-to').value), amount: parseUsdt0($('p-amount').value, { max: UINT32_MAX }) };
+  } catch {
+    return null; // incomplete or invalid: the form shows its own error on Send
+  }
+}
+
+function schedulePreview() {
+  // The shown answer is for the old input until the new one is worked out: mark it as updating straight away.
+  if (state.preview?.active) $('pay-preview').setAttribute('aria-busy', 'true');
+  clearTimeout(schedulePreview.timer);
+  schedulePreview.timer = setTimeout(runPreview, PREVIEW_DEBOUNCE_MS);
+}
+
+function hidePreview() {
+  const was = !!state.preview?.active;
+  state.preview = null;
+  runPreview.token = {};
+  $('pay-preview').removeAttribute('aria-busy');
+  show('pay-preview', false);
+  if (was) updateApprovalBox(); // the plain approval note takes over again
+}
+
+/// Best guess of the timestamp of the block the payment would land in: the pending block when the node reports one
+/// (anvil does, and its clock can differ from this computer's), otherwise the latest block.
+async function nextBlockTime() {
+  const [latest, pending] = await Promise.all([state.read.getBlock('latest'), state.read.getBlock('pending').catch(() => null)]);
+  return BigInt(Math.max(Number(latest?.timestamp ?? 0), Number(pending?.timestamp ?? 0)));
+}
+
+async function runPreview() {
+  const i = state.info;
+  const r = role();
+  const form = previewForm();
+  if (!i || !state.escrowAddr || (r !== 'owner' && r !== 'agent') || !form) return hidePreview();
+  const token = (runPreview.token = {});
+  const box = $('pay-preview');
+  box.setAttribute('aria-busy', 'true');
+  if (!state.preview?.active) {
+    // First look at this payment: show the card at once with a short wait note (reading circuits takes a moment).
+    state.preview = { active: true, loading: true, form, role: r, pick: null };
+    renderPreview();
+  }
+  try {
+    const e = escrowRead();
+    const [now, circuits, spentToday, lastResetDay, dailyCap, payee, trialLimit, coolingOffHours, confirmationThreshold, controller, frozen, balance, hash] =
+      await Promise.all([
+        nextBlockTime(), e.circuits(), e.spentToday(), e.lastResetDay(), e.dailyCap(), e.payees(form.to), e.trialLimit(), e.coolingOffHours(),
+        e.confirmationThreshold(), e.controller(), e.frozen(), e.balance(), e.currentPaymentHash(form.to, form.amount),
+      ]);
+    const list = circuits.map((c) => ({ kind: Number(c.kind), processor: c.processor, circuitId: c.circuitId, netlistHash: c.netlistHash }));
+    const [confirmation, netlists] = await Promise.all([
+      e.confirmations(hash),
+      Promise.all(list.map((c) => loadNetlist(c.processor, c.circuitId).catch(() => null))),
+    ]);
+    if (token !== runPreview.token) return;
+    const raw = {
+      spentToday, lastResetDay, dailyCap, trialLimit, coolingOffHours, confirmationThreshold, controller, frozen,
+      payee: { firstSeen: payee.firstSeen, saved: payee.saved },
+      confirmation: { expiresAt: confirmation.expiresAt, confirmedBy: confirmation.confirmedBy },
+    };
+    const ctx = buildContext(raw, { amount: form.amount, now });
+    const sim = simulate({ circuits: list, netlists, ctx, balance });
+    state.preview = { active: true, form, ctx, sim, netlists, role: r, pick: state.preview?.pick ?? null };
+    renderPreview();
+  } catch (err) {
+    if (token !== runPreview.token) return;
+    state.preview = { active: true, form, error: errorText(err), role: r, pick: null };
+    renderPreview();
+  }
+  box.removeAttribute('aria-busy');
+}
+
+function renderPreview() {
+  const p = state.preview;
+  const box = $('pay-preview');
+  $('approval-hint').innerHTML = '';
+  show('approval-hint', false);
+  show(box);
+  if (p.error || p.loading) {
+    box.className = `pay-preview ${p.error ? 'unknown' : 'loading'}`;
+    $('pp-verdict').textContent = p.error
+      ? 'Can’t preview this payment right now. You can still send it; the blockchain decides.'
+      : 'Checking what your rules would say…';
+    for (const id of ['pp-approve', 'pp-rules', 'pp-figures']) $(id).innerHTML = '';
+    $('pp-note').textContent = p.error ?? '';
+    show('pp-note', !!p.error);
+    show('pp-xray-btn', false);
+    show('pp-xray', false);
+    return;
+  }
+  const { ctx, sim, role: r } = p;
+  const v = verdictFor(sim, ctx, { role: r, ruleName: (k) => RULE[k]?.name ?? `Rule ${k}`, decode: decodeCircuitInput });
+  box.className = `pay-preview ${v.tone}`;
+  $('pp-verdict').textContent = v.text;
+
+  // The approval step, when the Approval rule is the only thing in the way (or already approved).
+  const conf = sim.results.find((x) => x.kind === KIND.CONFIRMATION);
+  let approve = '';
+  if (v.approveOnly) {
+    approve = r === 'owner'
+      ? '<button class="btn small primary" type="button" id="approve-inline-btn">Approve this payment</button><span class="small-text">One wallet transaction. Then send it within an hour.</span>'
+      : '<span class="small-text">Ask the owner to approve it in the Rules tab.</span>';
+  } else if (conf?.ok && ctx.confirmed && ctx.amount > ctx.threshold) {
+    approve = `<span class="small-text">Approved until ${esc(utcTime(ctx.confirmationExpiresAt))}. It works once.</span>`;
+  }
+  $('pp-approve').innerHTML = approve;
+
+  $('pp-rules').innerHTML = sim.results
+    .map((x) => {
+      const ex = explainPreview(x, ctx, { role: r });
+      const cls = ex.ok == null ? 'unknown' : ex.ok ? 'allow' : 'block';
+      const label = ex.ok == null ? 'Unknown' : ex.ok ? 'Would pass' : 'Would block';
+      return `<li data-kind="${x.kind}" data-input="${esc(x.input)}"><span class="verdict ${cls}">${label}</span><div>${kindTag(x.kind)}<br>${esc(ex.text)}</div></li>`;
+    })
+    .join('');
+
+  // Today's spending and the balance, after this payment if it would go through.
+  const went = sim.allowed === true;
+  const figs = [];
+  if (hasKindIn(sim, KIND.DAILY_CAP)) {
+    const cap = ctx.dailyCap;
+    const pct = (x) => (cap === 0n ? (x > 0n ? 100 : 0) : Math.min(100, Number((x * 10000n) / cap) / 100));
+    const before = pct(sim.spentBefore);
+    const tryTotal = sim.spentBefore + ctx.amount;
+    const add = Math.max(0, pct(tryTotal) - before);
+    const over = tryTotal > cap;
+    const label = went
+      ? `${money(sim.spentAfter)} of ${money(cap)} USDT0 used today after this payment`
+      : `Today stays at ${money(sim.spentBefore)} of ${money(cap)} USDT0 used`;
+    figs.push(`<div class="pp-fig k1"><span class="pp-fig-label">Today’s spending</span><strong>${esc(label)}</strong>
+      <div class="pp-meter${over ? ' over' : ''}" role="img" aria-label="${esc(`${money(sim.spentBefore)} spent, this payment ${money(ctx.amount)}, daily limit ${money(cap)} USDT0`)}"><span class="now" style="width:${before}%"></span><span class="add" style="width:${add}%"></span></div></div>`);
+  }
+  figs.push(`<div class="pp-fig"><span class="pp-fig-label">Left in this CircuitWill</span><strong>${esc(
+    went ? `${money(sim.balanceAfter)} USDT0 after this payment` : `Stays at ${money(sim.balance)} USDT0`,
+  )}</strong><span class="small-text">${esc(went ? `Now ${money(sim.balance)} USDT0.` : sim.allowed === false ? 'Nothing moves if it’s blocked.' : '')}</span></div>`);
+  $('pp-figures').innerHTML = figs.join('');
+
+  const notes = [];
+  if (ctx.newDay && hasKindIn(sim, KIND.DAILY_CAP)) notes.push('A new day started at midnight UTC, so today’s spending starts again at 0.');
+  const close = closeCalls(ctx, sim.results.map((x) => x.kind));
+  if (close.length) {
+    const what = { midnight: 'midnight UTC', waiting: 'the end of this recipient’s waiting time', approval: r === 'owner' ? 'your approval expiring' : 'the owner’s approval expiring' };
+    notes.push(`Close to ${close.map((c) => what[c]).join(' and ')}: the answer may change by the time you send.`);
+  }
+  $('pp-note').textContent = notes.join(' ');
+  show('pp-note', notes.length > 0);
+
+  const canXray = sim.results.length > 0;
+  show('pp-xray-btn', canXray);
+  if (!canXray) show('pp-xray', false);
+  else if (!$('pp-xray').classList.contains('hidden')) renderPreviewXray();
+}
+
+const hasKindIn = (sim, k) => sim.results.some((x) => x.kind === k);
+
+/// The Circuit X-ray of the preview: the will's own netlists run on the simulated inputs.
+function renderPreviewXray() {
+  const p = state.preview;
+  if (!p?.sim) return;
+  const panel = $('pp-xray');
+  const res = p.sim.results;
+  let pick = res.find((x) => x.index === p.pick);
+  if (!pick) pick = res.find((x) => x.ok === false) ?? res[0];
+  p.pick = pick.index;
+  panel.innerHTML = `<p class="small-text">Each rule is a real circuit of NAND gates on X Layer. Here your will’s own circuits run in this browser on the inputs this payment would give them. It’s a preview: the chain runs them again when you send, and that answer is final.</p>
+    <div class="xray-pick" role="group" aria-label="Rule">${res
+      .map((x) => {
+        const ans = x.ok == null ? '<span class="xray-ans">?</span>' : `<span class="xray-ans ${x.ok ? 'allow' : 'block'}">${x.ok ? 'would pass' : 'would block'}</span>`;
+        return `<button class="chip" type="button" data-pp-pick="${x.index}" aria-pressed="${x.index === pick.index}">${kindTag(x.kind)}${ans}</button>`;
+      })
+      .join('')}</div>
+    <div class="xray-view" id="pp-xray-view"></div>`;
+  const view = $('pp-xray-view');
+  const ruleName = RULE[pick.kind]?.name ?? KIND_LABEL[pick.kind] ?? `Circuit ${pick.circuitId}`;
+  const net = p.netlists?.[pick.index];
+  if (pick.status === STATUS.NOT_EVALUATED) {
+    view.innerHTML = `<p class="muted">${esc(ruleName)} wouldn’t run for this payment (the amount is too large for the circuits), so there is nothing to show.</p>`;
+    return;
+  }
+  if (!net || pick.status == null) {
+    view.innerHTML = `<p class="muted">${esc(explainPreview(pick, p.ctx).text)}</p>`;
+    return;
+  }
+  try {
+    const model = buildXray({ gates: net.gates, nIn: net.nIn, nOut: net.nOut, input: pick.input, kind: pick.kind, preview: true });
+    mountXray(view, model, { ruleName, ruleClass: RULE[pick.kind]?.cls ?? '', netlistOk: net.hash === pick.netlistHash });
+  } catch (err) {
+    view.innerHTML = `<p class="error">Couldn’t draw this circuit: ${esc(errorText(err))}</p>`;
+  }
+}
+
+// Kept apart from bind(), which wires the transaction buttons. Nothing here sends a transaction.
+function bindPreview() {
+  $('p-to').addEventListener('input', schedulePreview);
+  $('p-amount').addEventListener('input', schedulePreview);
+  $('pp-xray-btn').addEventListener('click', () => {
+    const panel = $('pp-xray');
+    const open = panel.classList.contains('hidden');
+    show(panel, open);
+    $('pp-xray-btn').setAttribute('aria-expanded', String(open));
+    $('pp-xray-btn').textContent = open ? 'Hide the circuits' : 'See the circuits';
+    if (open) renderPreviewXray();
+  });
+  $('pp-xray').addEventListener('click', (ev) => {
+    const b = ev.target instanceof Element ? ev.target.closest('[data-pp-pick]') : null;
+    if (!b || !state.preview) return;
+    state.preview.pick = Number(b.dataset.ppPick);
+    renderPreviewXray();
+  });
+  setInterval(() => {
+    if (state.preview?.active && state.view === 'send' && !document.hidden) runPreview();
+  }, PREVIEW_TICK_MS);
 }
 
 // ------------------------------------------------------------------ dashboard actions
@@ -1971,6 +2190,7 @@ async function loadLocalConfig() {
 async function init() {
   bind();
   bindMemoryToggle();
+  bindPreview();
   // local-config.json (written by scripts/setup-anvil.ps1) only applies when the page runs on this computer.
   const cfg = PAGE_IS_LOCAL ? await loadLocalConfig() : null;
   state.localConfig = cfg;

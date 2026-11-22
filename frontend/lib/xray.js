@@ -347,7 +347,8 @@ const STAGE_NAMES = {
 
 /// Everything the drawing needs, from a netlist and one set of input bytes. `recordedOutput` (hex or bytes) is the
 /// output the escrow recorded; when given, the computed bit is compared with it.
-export function buildXray({ gates, nIn, nOut = 1, input, kind = 0, recordedOutput = null }) {
+/// `preview: true` marks simulated inputs for a payment not sent yet: the wording then says "would be".
+export function buildXray({ gates, nIn, nOut = 1, input, kind = 0, recordedOutput = null, preview = false }) {
   const inputBytes = asBytes(input);
   const sig = evaluate(gates, nIn, inputBytes, nOut);
   const pins = pinMap(kind, inputBytes.length, nIn);
@@ -379,6 +380,7 @@ export function buildXray({ gates, nIn, nOut = 1, input, kind = 0, recordedOutpu
     outputHex: bytesToHex(packBits(outs)),
     recordedBit,
     matches: recordedBit == null ? null : recordedBit === outs[0],
+    preview: !!preview,
   };
 }
 
@@ -388,7 +390,8 @@ const money = (f) => (f ? formatField(f.key, f.value).replace(' USDT0', '') : '?
 /// A short plain-English caption of what this circuit does with these inputs.
 export function captionFor(m) {
   const yes = m.output === 1;
-  const end = yes ? 'so the output bit is 1: allowed.' : 'so the output bit is 0: blocked.';
+  const would = m.preview ? 'would be' : 'is';
+  const end = yes ? `so the output bit ${would} 1: allowed.` : `so the output bit ${would} 0: blocked.`;
   switch (m.kind) {
     case 1: {
       const a = fv(m, 'amount');
@@ -515,7 +518,7 @@ export function renderXraySvg(m, { title = 'Circuit X-ray' } = {}) {
   // Output bit.
   const o = L.output;
   parts.push(
-    `<g class="xr-out${m.output ? ' on' : ''}" style="--t:${L.maxDepth + 1}"><circle cx="${n1(o.x)}" cy="${n1(o.y)}" r="12"/><text class="xr-bit" x="${n1(o.x)}" y="${n1(o.y + 4.5)}" text-anchor="middle">${m.output}</text><text class="xr-outlbl" x="${n1(o.x + 17)}" y="${n1(o.y + 4)}">${m.output ? 'allowed' : 'blocked'}</text></g>`,
+    `<g class="xr-out${m.output ? ' on' : ''}" style="--t:${L.maxDepth + 1}"><circle cx="${n1(o.x)}" cy="${n1(o.y)}" r="12"/><text class="xr-bit" x="${n1(o.x)}" y="${n1(o.y + 4.5)}" text-anchor="middle">${m.output}</text><text class="xr-outlbl" x="${n1(o.x + 17)}" y="${n1(o.y + 4)}">${m.preview ? (m.output ? 'would allow' : 'would block') : m.output ? 'allowed' : 'blocked'}</text></g>`,
   );
   parts.push('</svg>');
   return parts.join('');
@@ -543,7 +546,9 @@ export function xrayHtml(m, { ruleName = 'Rule', ruleClass = '', netlistOk = nul
       ? `<span class="xr-match ok">Matches the chain: output ${m.output}</span>`
       : m.matches === false
         ? `<span class="xr-match bad">Does not match the chain</span>`
-        : '';
+        : m.preview
+          ? '<span class="xr-match preview">Preview</span>'
+          : '';
   const stages = L.lanes
     .filter((ln) => ln.gateCount > 0)
     .map((ln) => `${esc(ln.name || 'Gate')} <span class="muted">${ln.gateCount}</span>`)

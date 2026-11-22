@@ -482,6 +482,56 @@ details.more[open] > summary { color: var(--ink); margin-bottom: 8px; }
 .approval-hint.approved { background: var(--allow-wash); border-color: var(--allow); }
 .approval-hint.approved strong { color: var(--allow); }
 .final-line { margin-top: 10px; }
+
+/* ---------- payment preview: dashed edge and a "Preview" tag, so it never reads as a recorded decision ---------- */
+.pay-preview { --pp-tone: var(--muted); --pp-wash: var(--well);
+  border: 1px dashed color-mix(in srgb, var(--pp-tone) 70%, var(--rule-strong)); border-radius: var(--r-sm);
+  padding: 14px 16px 16px; background: var(--paper); min-width: 0; }
+.pay-preview.allow { --pp-tone: var(--allow); --pp-wash: var(--allow-wash); }
+.pay-preview.block { --pp-tone: var(--block); --pp-wash: var(--block-wash); }
+.pay-preview.unknown { --pp-tone: var(--warn); --pp-wash: var(--warn-wash); }
+.pay-preview.loading { --pp-tone: var(--muted); }
+.pay-preview.loading .pp-verdict { --icon: none; padding-left: 12px; font-weight: 500; }
+.pay-preview.loading .pp-verdict::before { display: none; }
+.pay-preview[aria-busy='true']:not(.loading) .pp-rules, .pay-preview[aria-busy='true']:not(.loading) .pp-figures { opacity: 0.6; transition: opacity 0.2s; }
+.pp-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 10px; }
+.pp-tag { font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink);
+  border: 1px solid var(--rule-strong); border-radius: 999px; padding: 2px 9px; }
+.pp-sub { font-size: 0.86rem; color: var(--muted); }
+.pp-verdict { position: relative; margin: 0; padding: 10px 12px 10px 40px; border-radius: var(--r-sm);
+  background: var(--pp-wash); color: var(--pp-tone); font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+.pp-verdict::before { content: ''; position: absolute; left: 12px; top: 11px; width: 20px; height: 20px; background: currentColor;
+  -webkit-mask: var(--icon, var(--i-warn)) center / contain no-repeat; mask: var(--icon, var(--i-warn)) center / contain no-repeat; }
+.pay-preview.allow .pp-verdict { --icon: var(--i-allow); }
+.pay-preview.block .pp-verdict { --icon: var(--i-block); }
+.pp-approve { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px; }
+.pp-approve:empty { display: none; }
+.pp-rules { margin-top: 12px; }
+.pp-rules .verdict { min-width: 104px; }
+.verdict.unknown { color: var(--warn); }
+.verdict.unknown::before { --icon: var(--i-warn); }
+.pp-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 12px; margin-top: 14px;
+  padding-top: 12px; border-top: 1px solid var(--rule); }
+.pp-fig { display: grid; gap: 4px; align-content: start; min-width: 0; font-size: 0.92rem; }
+.pp-fig-label { font-size: 0.8rem; color: var(--muted); }
+.pp-fig strong { font-weight: 600; }
+.pp-meter { display: flex; height: 8px; border-radius: 999px; background: var(--well); overflow: hidden; margin-top: 2px; }
+.pp-meter span { display: block; height: 100%; transition: width 0.4s var(--ease); }
+.pp-meter .now { background: var(--k1); }
+.pp-meter .add { background: repeating-linear-gradient(135deg, var(--k1) 0 4px, color-mix(in srgb, var(--k1) 45%, transparent) 4px 8px); }
+.pp-meter.over .add { background: repeating-linear-gradient(135deg, var(--block) 0 4px, color-mix(in srgb, var(--block) 45%, transparent) 4px 8px); }
+.pp-note { margin: 12px 0 0; color: var(--warn); }
+.pp-note:empty { display: none; }
+.pp-actions { margin-top: 12px; }
+.pp-xray { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--rule); min-width: 0; }
+.xr-match.preview { color: var(--ink); border: 1px dashed var(--rule-strong); }
+@media (prefers-reduced-motion: reduce) { .pp-meter span { transition: none; } }
+@media (max-width: 560px) {
+  .pay-preview { padding: 12px; }
+  .why-list.pp-rules .verdict { min-width: 0; }
+  .why-list.pp-rules li { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .pp-rules .rule-name { white-space: normal; }
+}
 .memory-row { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--rule); }
 .memory-toggle { display: inline-flex; align-items: flex-start; gap: 10px; font-weight: 500; cursor: pointer; line-height: 1.4; }
 .memory-toggle input { margin-top: 2px; }
