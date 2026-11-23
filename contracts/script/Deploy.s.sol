@@ -96,24 +96,29 @@ contract Deploy is Script {
     }
 
     function _configure(CircuitWillEscrow escrow, Config memory c) internal {
-        // Parameters first, then circuits: each circuit is live as soon as it is attached.
+        // Every parameter first, every circuit last. Until the first circuit is attached the escrow is in setup (every
+        // transfer is blocked), so raising a limit or saving a payee applies at once. After that, any loosening change
+        // reverts with LooseningIsDelayed and has to wait ruleDelay (24 h) through queueChange / applyChange.
         escrow.setDailyCap(c.cap);
-        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, c.processor, c.dailyCapId);
         if (c.whitelistId != 0) {
             escrow.setTrialLimit(c.trialLimit);
             escrow.setCoolingOffHours(c.coolingOffHours);
             for (uint256 i; i < c.savedPayees.length; ++i) {
                 escrow.setPayee(c.savedPayees[i], true);
             }
+        }
+        if (c.confirmationId != 0) escrow.setConfirmationThreshold(c.threshold);
+        if (c.agent != address(0)) escrow.setAgent(c.agent);
+
+        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, c.processor, c.dailyCapId);
+        if (c.whitelistId != 0) {
             escrow.attachCircuit(CircuitWillEscrow.CircuitKind.WHITELIST, c.processor, c.whitelistId);
         }
         if (c.confirmationId != 0) {
-            escrow.setConfirmationThreshold(c.threshold);
             escrow.attachCircuit(CircuitWillEscrow.CircuitKind.CONFIRMATION, c.processor, c.confirmationId);
         }
         if (c.freezeId != 0) {
             escrow.attachCircuit(CircuitWillEscrow.CircuitKind.FREEZE, c.processor, c.freezeId);
         }
-        if (c.agent != address(0)) escrow.setAgent(c.agent);
     }
 }

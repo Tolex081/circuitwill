@@ -86,7 +86,24 @@ export const FIELD_INFO = {
   threshold: { label: 'Approval needed above', short: 'approval above', fmt: 'usdt' },
   confirmed: { label: 'Owner approved', short: 'approved', fmt: 'flag' },
   frozen: { label: 'Frozen', short: 'frozen', fmt: 'flag' },
+  // Custom rules (facts v1, money in cents)
+  amount_c: { label: 'Amount', short: 'amount', fmt: 'cents' },
+  spent_day_after_c: { label: 'Spent today, with this payment', short: 'today', fmt: 'cents' },
+  spent_7d_after_c: { label: 'Spent in 7 days, with this payment', short: '7 days', fmt: 'cents' },
+  spent_month_after_c: { label: 'Spent this month, with this payment', short: 'month', fmt: 'cents' },
+  balance_after_c: { label: 'Left afterwards', short: 'left', fmt: 'cents' },
+  count_day_after: { label: 'Payment number today', short: 'count', fmt: 'num' },
+  slot_of_week_utc: { label: 'Time of week (UTC)', short: 'time', fmt: 'slot' },
+  payee_trusted: { label: 'Trusted recipient', short: 'trusted', fmt: 'flag' },
+  payee_known: { label: 'Recipient on your list', short: 'listed', fmt: 'flag' },
+  payee_paid_before: { label: 'Paid before', short: 'paid before', fmt: 'flag' },
+  payee_age_hours: { label: 'Hours on your list', short: 'hours on list', fmt: 'hours' },
+  checkin_age_hours: { label: 'Hours since check-in', short: 'check-in', fmt: 'hours' },
+  caller_role: { label: 'Who is paying', short: 'who', fmt: 'role' },
+  is_withdrawal: { label: 'Withdrawal', short: 'withdrawal', fmt: 'flag' },
 };
+
+const SLOT_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export function formatField(key, value) {
   const v = BigInt(value);
@@ -97,6 +114,14 @@ export function formatField(key, value) {
       return `${v} h`;
     case 'flag':
       return v ? 'yes (1)' : 'no (0)';
+    case 'cents':
+      return `${(v / 100n).toLocaleString('en-US')}${v % 100n ? '.' + String(v % 100n).padStart(2, '0') : ''} USDT0`;
+    case 'slot': {
+      const m = Number(v) * 15;
+      return `${SLOT_DAYS[Math.floor(m / 1440)] ?? '?'} ${String(Math.floor((m % 1440) / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')} UTC`;
+    }
+    case 'role':
+      return ['owner', 'AI helper', 'beneficiary', 'nobody'][Number(v)] ?? v.toString();
     default:
       return v.toString();
   }

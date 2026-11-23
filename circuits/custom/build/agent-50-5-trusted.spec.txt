@@ -1,0 +1,2 @@
+circuitwill-rule-compiler/1
+{"v":1,"tz":0,"appliesTo":["agent"],"anyOf":[{"allOf":[{"fact":"amount","max":"50.00"},{"fact":"count_day","max":5},{"fact":"payee_trusted","is":true}]}]}

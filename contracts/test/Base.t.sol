@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Test, Vm} from "forge-std/Test.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
@@ -103,12 +104,46 @@ abstract contract Base is Test {
         );
 
         vm.startPrank(owner);
-        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(processor), dailyCapId);
+        // Parameters first, circuits last: once a circuit is attached, raising a limit is delayed.
         escrow.setDailyCap(50 * USDT);
         escrow.setAgent(agentKey);
+        configureBeforeAttach();
+        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(processor), dailyCapId);
         vm.stopPrank();
 
         usdt.mint(address(escrow), 1_000 * USDT);
+    }
+
+    /// @dev Runs as the owner during setUp, before the first circuit is attached (setup: every setter applies at once).
+    function configureBeforeAttach() internal virtual {}
+
+    // ------------------------------------------------------------ delayed changes
+
+    /// @dev Runs a loosening change through queue -> wait -> apply as the controller, then puts the clock back, so a
+    ///      test can loosen a rule without the delay changing anything else it checks.
+    function loosenNow(CircuitWillEscrow.ChangeKind kind, address target, uint256 value) internal {
+        (VmSafe.CallerMode mode, address sender,) = vm.readCallers();
+        bool recurrent = mode == VmSafe.CallerMode.RecurrentPrank;
+        if (recurrent) vm.stopPrank();
+        address c = escrow.controller();
+        uint256 t = vm.getBlockTimestamp(); // not block.timestamp: via-IR may re-read it after the warp
+        vm.prank(c);
+        uint256 id = escrow.queueChange(kind, target, value);
+        vm.warp(t + escrow.ruleDelay());
+        vm.prank(c);
+        escrow.applyChange(id);
+        vm.warp(t);
+        if (recurrent) vm.startPrank(sender);
+    }
+
+    /// @dev Detaches the circuit currently at `index` through the delay (see `loosenNow`).
+    function detachNow(uint256 index) internal {
+        (VmSafe.CallerMode mode, address sender,) = vm.readCallers();
+        bool recurrent = mode == VmSafe.CallerMode.RecurrentPrank;
+        if (recurrent) vm.stopPrank();
+        uint64 uid = escrow.circuitAt(index).uid;
+        loosenNow(CircuitWillEscrow.ChangeKind.DETACH_CIRCUIT, address(0), uid);
+        if (recurrent) vm.startPrank(sender);
     }
 
     // ------------------------------------------------------------ log helpers

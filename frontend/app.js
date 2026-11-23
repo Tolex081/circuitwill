@@ -13,7 +13,9 @@
 import { ethers } from './vendor/ethers-6.13.4.min.js';
 import { isMemoryEnabled, setMemoryEnabled } from './lib/memory-pref.js';
 import { ESCROW_ABI, ESCROW_BYTECODE, KEY_ABI, KEY_BYTECODE } from './artifacts.js';
-import { KIND, KIND_LABEL, STATUS, STATUS_NAME, REASON, REASON_NAME, REASON_TEXT, ACTION_NAME } from './lib/meta.js';
+import { KIND, KIND_LABEL, STATUS, STATUS_NAME, REASON, REASON_NAME, REASON_TEXT, ACTION_NAME, CHANGE } from './lib/meta.js';
+import { isLoosening, describeChange, changeTiming, queueNotice, durationText } from './lib/changes.js';
+import { mountRuleBuilder } from './rule-builder.js';
 import {
   UINT32_MAX,
   parseUsdt0,
@@ -60,6 +62,7 @@ const RULE = {
   [KIND.WHITELIST]: { name: 'Trusted recipients', cls: 'k2', idKey: 'whitelist' },
   [KIND.CONFIRMATION]: { name: 'Approval for large payments', cls: 'k3', idKey: 'confirmation' },
   [KIND.FREEZE]: { name: 'Emergency freeze', cls: 'k4', idKey: 'freeze' },
+  [KIND.CUSTOM]: { name: 'Custom rule', cls: 'k5', idKey: null },
 };
 const KINDS = [KIND.DAILY_CAP, KIND.WHITELIST, KIND.CONFIRMATION, KIND.FREEZE];
 
@@ -292,9 +295,10 @@ function role() {
   if (!i) return 'unknown';
   if (same(i.controller, state.account)) return 'owner';
   if (i.agentActive && same(i.agent, state.account)) return 'agent';
+  if (i.beneficiaryActive && same(i.beneficiary, state.account)) return 'beneficiary';
   return 'viewer';
 }
-const ROLE_LABEL = { owner: 'Owner', agent: 'AI helper', viewer: 'View only' };
+const ROLE_LABEL = { owner: 'Owner', agent: 'AI helper', beneficiary: 'Beneficiary', viewer: 'View only' };
 
 function renderNetwork() {
   const b = $('network-badge');
@@ -596,18 +600,18 @@ function renderRecent() {
 
 /// Sends `contract.method(...args)` with gasLimit = eth_estimateGas + 10%. The escrow reverts with InsufficientGas
 /// when an eval is starved, so the estimate is a limit at which every circuit is evaluated in full.
-async function sendTx(label, contract, method, args = []) {
+async function sendTx(label, contract, method, args = [], overrides = {}) {
   requireSigner();
   const log = activity(label);
   try {
     const fn = contract.connect(state.signer).getFunction(method);
     txStatus(`${label}: preparing…`);
     log.update('estimating gas (eth_estimateGas)…');
-    const est = await fn.estimateGas(...args);
+    const est = await fn.estimateGas(...args, overrides);
     const gasLimit = est + est / 10n;
     log.update(`estimate ${est.toLocaleString()} gas, sending with ${gasLimit.toLocaleString()}…`);
     txStatus(state.mode === 'anvil' ? `${label}: sending…` : `${label}: confirm in your wallet…`);
-    const tx = await fn(...args, { gasLimit });
+    const tx = await fn(...args, { ...overrides, gasLimit });
     log.update(`sent ${tx.hash}, waiting…`);
     txStatus(`${label}: waiting for X Layer…`);
     const rc = await tx.wait();
@@ -730,26 +734,28 @@ function circuitIdField(id, what) {
   return parseIntInRange(v, { max: 2n ** 256n - 1n, what: `${what} circuit id` });
 }
 
-/// The ordered list of escrow calls that apply the wizard's rules (same order as Deploy.s.sol: parameters, then attach).
+/// The ordered list of escrow calls that apply the wizard's rules (same order as Deploy.s.sol): every setting first,
+/// every circuit last. Until the first circuit is attached all settings apply at once; after that, loosening one waits.
 function buildPlan(r, processor) {
-  const plan = [];
+  const settings = [];
+  const attach = [];
   if (r.cap != null) {
-    plan.push([`Set daily limit to ${money(r.cap)} USDT0`, 'setDailyCap', [r.cap]]);
-    plan.push(['Turn on Daily limit', 'attachCircuit', [KIND.DAILY_CAP, processor, circuitIdField('c-cap-id', 'Daily limit')]]);
+    settings.push([`Set daily limit to ${money(r.cap)} USDT0`, 'setDailyCap', [r.cap]]);
+    attach.push(['Turn on Daily limit', 'attachCircuit', [KIND.DAILY_CAP, processor, circuitIdField('c-cap-id', 'Daily limit')]]);
   }
   if (r.trial != null) {
-    plan.push([`Let new recipients receive up to ${money(r.trial)} USDT0`, 'setTrialLimit', [r.trial]]);
-    plan.push([`Set waiting time to ${r.hours} hours`, 'setCoolingOffHours', [r.hours]]);
-    for (const p of r.payees) plan.push([`Trust ${same(p, state.account) ? 'your own wallet' : short(p)}`, 'setPayee', [p, true]]);
-    plan.push(['Turn on Trusted recipients', 'attachCircuit', [KIND.WHITELIST, processor, circuitIdField('c-wl-id', 'Trusted recipients')]]);
+    settings.push([`Let new recipients receive up to ${money(r.trial)} USDT0`, 'setTrialLimit', [r.trial]]);
+    settings.push([`Set waiting time to ${r.hours} hours`, 'setCoolingOffHours', [r.hours]]);
+    for (const p of r.payees) settings.push([`Trust ${same(p, state.account) ? 'your own wallet' : short(p)}`, 'setPayee', [p, true]]);
+    attach.push(['Turn on Trusted recipients', 'attachCircuit', [KIND.WHITELIST, processor, circuitIdField('c-wl-id', 'Trusted recipients')]]);
   }
   if (r.threshold != null) {
-    plan.push([`Require approval above ${money(r.threshold)} USDT0`, 'setConfirmationThreshold', [r.threshold]]);
-    plan.push(['Turn on Approval for large payments', 'attachCircuit', [KIND.CONFIRMATION, processor, circuitIdField('c-conf-id', 'Approval')]]);
+    settings.push([`Require approval above ${money(r.threshold)} USDT0`, 'setConfirmationThreshold', [r.threshold]]);
+    attach.push(['Turn on Approval for large payments', 'attachCircuit', [KIND.CONFIRMATION, processor, circuitIdField('c-conf-id', 'Approval')]]);
   }
-  if (r.freeze) plan.push(['Turn on Emergency freeze', 'attachCircuit', [KIND.FREEZE, processor, circuitIdField('c-frz-id', 'Freeze')]]);
-  if (r.agent) plan.push([`Add AI helper ${short(r.agent)}`, 'setAgent', [r.agent]]);
-  return plan;
+  if (r.freeze) attach.push(['Turn on Emergency freeze', 'attachCircuit', [KIND.FREEZE, processor, circuitIdField('c-frz-id', 'Freeze')]]);
+  if (r.agent) settings.push([`Add AI helper ${short(r.agent)}`, 'setAgent', [r.agent]]);
+  return [...settings, ...attach];
 }
 
 function ruleSentence(kind, v) {
@@ -904,21 +910,106 @@ async function refresh() {
     e.decisionCount(), e.balance(), e.tapeoutFactory(), state.read.getBlock('latest'),
   ]);
   const tok = new ethers.Contract(token, ERC20_ABI, state.read);
-  const [symbol, decimals, walletBalance, agentActive] = await Promise.all([
+  const [symbol, decimals, walletBalance, agentActive, ruleDelay, changeCount, beneficiary, lastCheckIn] = await Promise.all([
     tok.symbol().catch(() => '?'),
     tok.decimals().catch(() => null),
     state.account ? tok.balanceOf(state.account) : null,
     agent === ethers.ZeroAddress ? false : e.isActiveAgent(agent),
+    e.ruleDelay(), e.changeCount(), e.beneficiary(), e.lastCheckIn(),
+  ]);
+  const list = circuits.map((c) => ({ kind: Number(c.kind), processor: c.processor, circuitId: c.circuitId, netlistHash: c.netlistHash, uid: c.uid, tampered: c.tampered }));
+  const [beneficiaryActive, pending, customRules] = await Promise.all([
+    beneficiary === ethers.ZeroAddress ? false : e.isActiveBeneficiary(beneficiary),
+    loadPendingChanges(e, changeCount),
+    loadCustomRules(e, list),
   ]);
   state.info = {
     token, symbol, decimals, controllerNft, controllerTokenId, controller, dailyCap, spentToday, today, trialLimit, coolingOffHours,
     confirmationThreshold, frozen, evalGasLimit, agent, agentSetBy, agentActive, decisionCount, balance, tapeoutFactory, walletBalance,
+    ruleDelay, changeCount, beneficiary, beneficiaryActive, lastCheckIn, pending, customRules,
     now: latest?.timestamp ?? Math.floor(Date.now() / 1000),
-    circuits: circuits.map((c) => ({ kind: Number(c.kind), processor: c.processor, circuitId: c.circuitId, netlistHash: c.netlistHash })),
+    circuits: list,
   };
   renderAll();
   syncMemory();
   await Promise.all([loadPayees(), loadDecisions()]);
+}
+
+/// Changes queued with queueChange that are still pending (newest 40 ids; applied and cancelled ones are deleted).
+async function loadPendingChanges(e, count) {
+  const ids = [];
+  for (let id = Number(count); id >= 1 && ids.length < 40; id--) ids.push(id);
+  const rows = await Promise.all(ids.map(async (id) => [id, await e.pendingChanges(id)]));
+  return rows
+    .filter(([, r]) => r.eta !== 0n)
+    .map(([id, r]) => ({ id, kind: Number(r.kind), eta: r.eta, target: r.target, queuedBy: r.queuedBy, value: r.value }))
+    .sort((a, b) => Number(a.eta - b.eta));
+}
+
+/// specHash (on chain) and the owner-facing text (from CustomRuleAttached events in the scanned range) per custom uid.
+async function loadCustomRules(e, list) {
+  const customs = list.filter((c) => c.kind === KIND.CUSTOM);
+  if (!customs.length) return {};
+  const out = {};
+  await Promise.all(customs.map(async (c) => (out[String(c.uid)] = { specHash: await e.customSpecHash(c.uid), text: null })));
+  try {
+    const { from, latest } = await scanRange();
+    const logs = await getLogsChunked({ address: state.escrowAddr, topics: [escrowInterface.getEvent('CustomRuleAttached').topicHash] }, from, latest);
+    for (const l of logs) {
+      const p = escrowInterface.parseLog(l);
+      const k = String(p.args.uid);
+      if (out[k]) out[k].text = p.args.text;
+    }
+  } catch {
+    /* text is informative only */
+  }
+  return out;
+}
+
+/// The current values the loosening check compares against.
+const currentValues = (i = state.info) => ({
+  dailyCap: i.dailyCap, trialLimit: i.trialLimit, coolingOffHours: i.coolingOffHours, confirmationThreshold: i.confirmationThreshold, frozen: i.frozen, ruleDelay: i.ruleDelay,
+});
+
+/// Plain name of the attached circuit with this uid.
+function circuitName(uid) {
+  const c = state.info?.circuits.find((x) => BigInt(x.uid) === BigInt(uid));
+  if (!c) return `rule #${uid}`;
+  if (c.kind === KIND.CUSTOM) {
+    const t = state.info.customRules?.[String(c.uid)]?.text;
+    return t ? `the custom rule “${t}”` : `custom rule #${uid}`;
+  }
+  return RULE[c.kind]?.name ?? `rule #${uid}`;
+}
+
+/// Tightening applies at once (the direct setter); loosening goes through queueChange and waits ruleDelay.
+/// `direct` = [method, args] of the setter, or null when the change can only be queued (detaching a circuit).
+async function applyOrQueue(kind, { value = 0n, target = ethers.ZeroAddress, label, direct, cur = {} }) {
+  const live = state.info.circuits.length > 0;
+  if (direct && !isLoosening(kind, value, { ...currentValues(), ...cur }, { live })) return sendTx(label, escrowRead(), direct[0], direct[1]);
+  const desc = describeChange({ kind, value, target }, { circuitName });
+  if (!(await ask({ title: 'This change has to wait', body: queueNotice(desc, state.info.ruleDelay), ok: 'Queue it' }))) return null;
+  const rc = await sendTx(`Queue: ${desc}`, escrowRead(), 'queueChange', [kind, target, value]);
+  toast(`Queued. “${desc}” can be applied in ${durationText(state.info.ruleDelay)}, from Waiting changes on the Rules tab.`, { ok: true });
+  return rc;
+}
+
+function renderPending() {
+  const i = state.info;
+  const owner = role() === 'owner';
+  const now = Number(i.now);
+  $('pending-now').textContent = `Tightening a rule applies at once. Loosening one (a higher limit, trusting someone, unfreezing, turning a rule off) waits ${durationText(i.ruleDelay)}, so a stolen key can’t empty this CircuitWill straight away.`;
+  $('pending-list').innerHTML =
+    i.pending
+      .map((p) => {
+        const t = changeTiming(p, now);
+        const stale = !same(p.queuedBy, i.controller);
+        const acts = owner && !stale
+          ? `${t.state === 'ready' ? `<button class="btn small primary" type="button" data-apply-change="${p.id}">Apply now</button>` : ''}<button class="btn small ghost" type="button" data-cancel-change="${p.id}">Cancel</button>`
+          : '';
+        return `<li class="${t.state}"><div><strong>${esc(describeChange(p, { circuitName }))}</strong><small class="muted">${esc(stale ? 'Queued by a previous owner, so it can’t be applied.' : t.text)}</small></div><span class="acts">${acts}</span></li>`;
+      })
+      .join('') || '<li class="empty">Nothing is waiting.</li>';
 }
 
 function hasKind(k) {
@@ -938,8 +1029,20 @@ function renderAll() {
   renderSendSide();
   renderRules();
   renderAdvanced();
+  renderPending();
+  state.builder?.render();
   renderPermissions();
   updateApprovalBox();
+}
+
+/// One line per attached custom rule, for the Overview and Send summaries.
+function customLines() {
+  return state.info.circuits
+    .filter((c) => c.kind === KIND.CUSTOM)
+    .map((c) => {
+      const t = state.info.customRules?.[String(c.uid)]?.text;
+      return `<li class="k5"><span class="dot"></span><div><strong>Custom rule</strong>${esc(t ?? `Rule #${c.uid}`)}</div></li>`;
+    });
 }
 
 function renderHeader() {
@@ -952,6 +1055,7 @@ function renderHeader() {
   const line = {
     owner: ['Owner', '', 'You hold this CircuitWill’s key, so you can send money, change rules and withdraw.'],
     agent: ['AI helper', '', 'Your wallet is this CircuitWill’s AI helper: it can ask to send payments. Only the owner can change rules.'],
+    beneficiary: ['Beneficiary', '', 'Your wallet is this CircuitWill’s beneficiary: you can send payments only when a custom rule for the beneficiary allows it.'],
     viewer: ['View only', 'viewer', 'Your wallet isn’t the owner or the AI helper of this CircuitWill, so you can look but not change anything.'],
     none: ['View only', 'viewer', 'Connect the owner’s wallet to send money or change rules.'],
   }[r];
@@ -983,7 +1087,7 @@ function renderOverview() {
   $('rules-summary').innerHTML = KINDS.map((k) => {
     const on = hasKind(k);
     return `<li class="${RULE[k].cls}${on ? '' : ' off'}"><span class="dot"></span><div><strong>${esc(RULE[k].name)}</strong>${on ? esc(ruleSentence(k, infoValues())) : 'Off'}</div></li>`;
-  }).join('');
+  }).join('') + customLines().join('');
 }
 
 function renderSendSide() {
@@ -991,6 +1095,7 @@ function renderSendSide() {
   const lines = KINDS.filter(hasKind).map(
     (k) => `<li class="${RULE[k].cls}"><span class="dot"></span><div><strong>${esc(RULE[k].name)}</strong>${esc(ruleSentence(k, infoValues()))}</div></li>`,
   );
+  lines.push(...customLines());
   lines.push(`<li><span class="dot neutral"></span><div><strong>Enough money</strong>This CircuitWill holds ${esc(money(i.balance))} USDT0.</div></li>`);
   $('send-checks').innerHTML = i.circuits.length
     ? lines.join('')
@@ -999,7 +1104,9 @@ function renderSendSide() {
   $('send-role-note').textContent =
     r === 'agent'
       ? 'You’re sending as the AI helper.'
-      : r === 'owner'
+      : r === 'beneficiary'
+        ? 'You’re sending as the beneficiary: only a custom rule for the beneficiary can allow it.'
+        : r === 'owner'
         ? ''
         : 'Only the owner or the AI helper of this CircuitWill can send from it.';
   show('withdraw-card', r === 'owner');
@@ -1011,7 +1118,7 @@ function renderRules() {
   const owner = role() === 'owner';
   const src = circuitSource();
   $('rules-intro').textContent = owner
-    ? 'Only you, the owner, can change these. Changes apply from the very next payment.'
+    ? `Only you, the owner, can change these. Making a rule stricter applies from the very next payment; loosening one waits ${durationText(i.ruleDelay)} (see Waiting changes).`
     : 'Only the owner of this CircuitWill can change these rules.';
   show('circuits-empty', i.circuits.length === 0);
   for (const k of KINDS) {
@@ -1072,7 +1179,7 @@ function renderPermissions() {
   const i = state.info;
   if (!i) return;
   const r = role();
-  const canPropose = r === 'owner' || r === 'agent';
+  const canPropose = r === 'owner' || r === 'agent' || r === 'beneficiary';
   document.querySelector('#propose-form button[type="submit"]').disabled = !canPropose;
   document.querySelector('#fund-form button').disabled = !state.signer;
   document.querySelectorAll('#attach-form button, form[data-rule="evalGasLimit"] button').forEach((b) => (b.disabled = r !== 'owner'));
@@ -1101,7 +1208,7 @@ function renderAdvanced() {
         <td>${idx}</td><td>${kindTag(c.kind)}<br><small>${esc(KIND_LABEL[c.kind] ?? '')}</small></td>
         <td class="mono">${esc(short(c.processor))} / ${esc(c.circuitId)}</td>
         <td class="mono" title="${esc(c.netlistHash)}">${esc(c.netlistHash.slice(0, 14))}…</td>
-        <td><button class="btn small ghost" type="button" data-detach="${idx}" ${owner ? '' : 'disabled'}>Detach</button></td></tr>`,
+        <td><button class="btn small ghost" type="button" data-detach-uid="${esc(c.uid)}" ${owner ? '' : 'disabled'}>Detach</button></td></tr>`,
       )
       .join('') || '<tr><td colspan="5" class="muted">No circuits attached.</td></tr>';
   document.querySelector('form[data-rule="evalGasLimit"] .current').textContent = `Now ${i.evalGasLimit.toLocaleString()} gas per circuit (allowed: 100,000 to 30,000,000).`;
@@ -1199,7 +1306,9 @@ async function loadDecisions() {
   const { from, latest } = await scanRange();
   const topics = [[escrowInterface.getEvent('Decision').topicHash, escrowInterface.getEvent('CircuitEvaluated').topicHash]];
   const logs = await getLogsChunked({ address: state.escrowAddr, topics }, from, latest);
-  const recs = parseDecisionLogs(logs).sort((a, b) => Number(b.decision.decisionId - a.decision.decisionId)).slice(0, 25);
+  const all = parseDecisionLogs(logs).sort((a, b) => Number(b.decision.decisionId - a.decision.decisionId));
+  state.allDecisions = all; // for the opt-in rule suggestions (computed on this device)
+  const recs = all.slice(0, 25);
   const blocks = new Map();
   await Promise.all([...new Set(recs.map((r) => r.blockNumber))].map(async (n) => blocks.set(n, await state.read.getBlock(n))));
   for (const r of recs) r.time = blocks.get(r.blockNumber)?.timestamp;
@@ -1249,6 +1358,11 @@ function explainCircuit(c) {
       return { ok, text: `Payments above ${money(f.threshold)} USDT0 need the owner’s approval first, and this one wasn’t approved.` };
     case KIND.FREEZE:
       return ok ? { ok, text: 'Not frozen.' } : { ok, text: 'This CircuitWill was frozen.' };
+    case KIND.CUSTOM: {
+      const who = ['the owner', 'the AI helper', 'the beneficiary', 'someone else'][Number(f.caller_role)] ?? 'someone';
+      const day = `${(f.spent_day_after_c / 100n).toString()} USDT0 spent today with this payment`;
+      return { ok, text: `${ok ? 'Your custom rule allowed it' : 'Your custom rule said no'} (paid by ${who}, ${day}). Open the X-ray to see every fact it checked.` };
+    }
     default:
       return { ok, text: ok ? 'Said yes.' : 'Said no.' };
   }
@@ -1609,7 +1723,7 @@ async function runPreview() {
   const i = state.info;
   const r = role();
   const form = previewForm();
-  if (!i || !state.escrowAddr || (r !== 'owner' && r !== 'agent') || !form) return hidePreview();
+  if (!i || !state.escrowAddr || !['owner', 'agent', 'beneficiary'].includes(r) || !form) return hidePreview();
   const token = (runPreview.token = {});
   const box = $('pay-preview');
   box.setAttribute('aria-busy', 'true');
@@ -1626,9 +1740,12 @@ async function runPreview() {
         e.confirmationThreshold(), e.controller(), e.frozen(), e.balance(), e.currentPaymentHash(form.to, form.amount),
       ]);
     const list = circuits.map((c) => ({ kind: Number(c.kind), processor: c.processor, circuitId: c.circuitId, netlistHash: c.netlistHash }));
-    const [confirmation, netlists] = await Promise.all([
+    const hasCustom = list.some((c) => c.kind === KIND.CUSTOM);
+    const [confirmation, netlists, custom] = await Promise.all([
       e.confirmations(hash),
       Promise.all(list.map((c) => loadNetlist(c.processor, c.circuitId).catch(() => null))),
+      // The escrow builds the custom-rule facts itself (rolling totals, calendar, check-in), as of the latest block.
+      hasCustom ? e.customFactsFor(state.account, form.to, form.amount, false) : null,
     ]);
     if (token !== runPreview.token) return;
     const raw = {
@@ -1637,6 +1754,8 @@ async function runPreview() {
       confirmation: { expiresAt: confirmation.expiresAt, confirmedBy: confirmation.confirmedBy },
     };
     const ctx = buildContext(raw, { amount: form.amount, now });
+    ctx.customInput = custom?.ok ? ethers.getBytes(custom.input) : null;
+    ctx.isBeneficiary = r === 'beneficiary';
     const sim = simulate({ circuits: list, netlists, ctx, balance });
     state.preview = { active: true, form, ctx, sim, netlists, role: r, pick: state.preview?.pick ?? null };
     renderPreview();
@@ -1835,22 +1954,22 @@ async function saveRule(rule) {
   switch (rule) {
     case 'dailyCap': {
       const x = parseUsdt0(v('r-cap'), { allowZero: true, what: 'Daily limit' });
-      await sendTx(`Set daily limit to ${money(x)} USDT0`, e, 'setDailyCap', [x]);
+      await applyOrQueue(CHANGE.DAILY_CAP, { value: x, label: `Set daily limit to ${money(x)} USDT0`, direct: ['setDailyCap', [x]] });
       break;
     }
     case 'trialLimit': {
       const x = parseUsdt0(v('r-trial'), { allowZero: true, what: 'Most a new recipient can receive' });
-      await sendTx(`Let new recipients receive up to ${money(x)} USDT0`, e, 'setTrialLimit', [x]);
+      await applyOrQueue(CHANGE.TRIAL_LIMIT, { value: x, label: `Let new recipients receive up to ${money(x)} USDT0`, direct: ['setTrialLimit', [x]] });
       break;
     }
     case 'coolingOffHours': {
       const x = parseHours(v('r-cool'));
-      await sendTx(`Set waiting time to ${x} hours`, e, 'setCoolingOffHours', [x]);
+      await applyOrQueue(CHANGE.COOLING_OFF_HOURS, { value: x, label: `Set waiting time to ${x} hours`, direct: ['setCoolingOffHours', [x]] });
       break;
     }
     case 'confirmationThreshold': {
       const x = parseUsdt0(v('r-threshold'), { allowZero: true, what: 'Approval amount' });
-      await sendTx(`Require approval above ${money(x)} USDT0`, e, 'setConfirmationThreshold', [x]);
+      await applyOrQueue(CHANGE.CONFIRMATION_THRESHOLD, { value: x, label: `Require approval above ${money(x)} USDT0`, direct: ['setConfirmationThreshold', [x]] });
       break;
     }
     case 'agent': {
@@ -1878,10 +1997,25 @@ async function attachKind(kind) {
   await sendTx(`Turn on ${RULE[kind].name}`, escrowRead(), 'attachCircuit', [kind, src.processor, BigInt(id)]);
 }
 
+/// Turning a rule off loosens the rules, so it is always queued (by the circuit's stable uid) and waits ruleDelay.
+async function detachUid(uid) {
+  await applyOrQueue(CHANGE.DETACH_CIRCUIT, { value: BigInt(uid), label: `Turn off ${circuitName(uid)}`, direct: null });
+}
+
 async function detachKind(kind) {
-  const idx = state.info.circuits.findIndex((c) => c.kind === kind);
-  if (idx < 0) return;
-  await sendTx(`Turn off ${RULE[kind].name}`, escrowRead(), 'detachCircuit', [idx]);
+  const c = state.info.circuits.find((x) => x.kind === kind);
+  if (c) await detachUid(c.uid);
+}
+
+/// Saving (trusting) a payee loosens the Trusted recipients rule; adding someone as new or untrusting is instant.
+async function setPayeeTrust(p, saved) {
+  const known = state.payees.find((r) => same(r.p, p));
+  await applyOrQueue(CHANGE.SAVE_PAYEE, {
+    target: p,
+    label: `${saved ? 'Trust' : known ? 'Stop trusting' : 'Add new recipient'} ${short(p)}`,
+    direct: ['setPayee', [p, saved]],
+    cur: { payeeSaved: !saved || !!known?.saved },
+  });
 }
 
 async function lookupConfirmation() {
@@ -2023,7 +2157,8 @@ function bind() {
     if (!(await ask({ title: 'Freeze all payments?', body: 'Every payment and withdrawal will be blocked, including your AI helper’s, until you unfreeze.', ok: 'Freeze', danger: true }))) return;
     guard(btn, async () => (await sendTx('Freeze all payments', escrowRead(), 'setFrozen', [true]), refresh()));
   });
-  const unfreeze = (ev) => guard(ev.currentTarget, async () => (await sendTx('Unfreeze', escrowRead(), 'setFrozen', [false]), refresh()));
+  const unfreeze = (ev) =>
+    guard(ev.currentTarget, async () => (await applyOrQueue(CHANGE.UNFREEZE, { label: 'Unfreeze', direct: ['setFrozen', [false]] }), refresh()));
   $('unfreeze-btn').addEventListener('click', unfreeze);
   $('unfreeze-banner-btn').addEventListener('click', unfreeze);
   $('agent-clear-btn').addEventListener('click', async (ev) => {
@@ -2036,8 +2171,7 @@ function bind() {
     ev.preventDefault();
     guard(ev.currentTarget, async () => {
       const p = parseAddress($('payee-addr').value, 'Address');
-      const saved = $('payee-saved').checked;
-      await sendTx(`${saved ? 'Trust' : 'Add new recipient'} ${short(p)}`, escrowRead(), 'setPayee', [p, saved]);
+      await setPayeeTrust(p, $('payee-saved').checked);
       $('payee-addr').value = '';
       await refresh();
     });
@@ -2114,13 +2248,6 @@ function bind() {
     }
     if (b.dataset.turnOff) {
       const k = Number(b.dataset.turnOff);
-      const ok = await ask({
-        title: `Turn off ${RULE[k].name}?`,
-        body: `${offText(k)} This applies from the next payment. You can turn it back on later.`,
-        ok: 'Turn off',
-        danger: true,
-      });
-      if (!ok) return;
       return guard(b, async () => (await detachKind(k), refresh()));
     }
     if (b.id === 'approve-inline-btn') {
@@ -2132,16 +2259,23 @@ function bind() {
         await updateApprovalBox();
       });
     }
-    if (b.dataset.detach !== undefined) {
-      const idx = Number(b.dataset.detach);
-      const c = state.info.circuits[idx];
-      if (!(await ask({ title: `Detach ${RULE[c.kind]?.name ?? 'this circuit'}?`, body: 'It stops applying from the next payment.', ok: 'Detach', danger: true }))) return;
-      return guard(b, async () => (await sendTx(`detachCircuit ${idx}`, escrowRead(), 'detachCircuit', [idx]), refresh()));
+    if (b.dataset.detachUid !== undefined) {
+      return guard(b, async () => (await detachUid(b.dataset.detachUid), refresh()));
+    }
+    if (b.dataset.applyChange) {
+      const id = BigInt(b.dataset.applyChange);
+      const p = state.info.pending.find((x) => BigInt(x.id) === id);
+      return guard(b, async () => (await sendTx(`Apply: ${describeChange(p, { circuitName })}`, escrowRead(), 'applyChange', [id]), refresh()));
+    }
+    if (b.dataset.cancelChange) {
+      const id = BigInt(b.dataset.cancelChange);
+      const p = state.info.pending.find((x) => BigInt(x.id) === id);
+      return guard(b, async () => (await sendTx(`Cancel: ${describeChange(p, { circuitName })}`, escrowRead(), 'cancelChange', [id]), refresh()));
     }
     if (b.dataset.togglePayee) {
       const p = b.dataset.togglePayee;
       const saved = b.dataset.saved !== 'true';
-      return guard(b, async () => (await sendTx(`${saved ? 'Trust' : 'Stop trusting'} ${short(p)}`, escrowRead(), 'setPayee', [p, saved]), refresh()));
+      return guard(b, async () => (await setPayeeTrust(p, saved), refresh()));
     }
     if (b.dataset.removePayee) {
       const p = b.dataset.removePayee;
@@ -2191,6 +2325,9 @@ async function init() {
   bind();
   bindMemoryToggle();
   bindPreview();
+  state.builder = mountRuleBuilder({
+    $, esc, show, ethers, state, sendTx, ask, guard, toast, refresh, escrowRead, circuitSource, role, applyOrQueue, errorText, short, utcTime,
+  });
   // local-config.json (written by scripts/setup-anvil.ps1) only applies when the page runs on this computer.
   const cfg = PAGE_IS_LOCAL ? await loadLocalConfig() : null;
   state.localConfig = cfg;

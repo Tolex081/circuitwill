@@ -96,6 +96,9 @@ export function packFor(kind, ctx) {
       return packConfirmation(ctx.amount, ctx.threshold, ctx.confirmed);
     case KIND.FREEZE:
       return packFreeze(ctx.frozen);
+    case KIND.CUSTOM:
+      // The facts word is read from the escrow itself (customFactsFor), so rolling totals and the calendar match.
+      return ctx.customInput ?? null;
     default:
       return null; // the escrow cannot attach other kinds
   }
@@ -163,6 +166,7 @@ export function simulate({ circuits, netlists, ctx, balance }) {
   });
   const unknown = results.some((r) => r.status == null);
   let reason = unknown ? null : reasonFromStatuses(results.map((r) => r.status));
+  if (reason === REASON.NONE && ctx.isBeneficiary && !circuits.some((c) => Number(c.kind) === KIND.CUSTOM)) reason = REASON.NO_CUSTOM_RULE;
   if (reason === REASON.NONE && big(balance) < ctx.amount) reason = REASON.INSUFFICIENT_BALANCE;
   const allowed = reason == null ? null : reason === REASON.NONE;
   const spentAfter = allowed ? ctx.spentBefore + ctx.amount : ctx.spentBefore;
@@ -194,6 +198,8 @@ export function shortReasonFor(c) {
       return 'not approved';
     case KIND.FREEZE:
       return 'frozen';
+    case KIND.CUSTOM:
+      return 'your custom rule said no';
     default:
       return 'said no';
   }
@@ -246,6 +252,8 @@ export function explainPreview(r, ctx, { role = 'owner' } = {}) {
       return { ok, text: `Payments above ${money(ctx.threshold)} USDT0 need ${approval(role)} first, and this one isn’t approved yet.` };
     case KIND.FREEZE:
       return ok ? { ok, text: 'Not frozen.' } : { ok, text: 'This CircuitWill is frozen.' };
+    case KIND.CUSTOM:
+      return ok ? { ok, text: 'Your custom rule allows it.' } : { ok, text: 'Your custom rule doesn’t allow this payment.' };
     default:
       return { ok, text: ok ? 'Would say yes.' : 'Would say no.' };
   }
@@ -268,6 +276,8 @@ function blockerPhrase(r, ctx, role) {
       return `above ${money(ctx.threshold)} USDT0 it needs ${approval(role)} first`;
     case KIND.FREEZE:
       return 'this CircuitWill is frozen';
+    case KIND.CUSTOM:
+      return 'your custom rule doesn’t allow it';
     default:
       return 'a rule would say no';
   }
@@ -277,6 +287,7 @@ function blockerPhrase(r, ctx, role) {
 /// the Approval rule is the only thing in the way (so the page can offer its approve action).
 export function verdictFor(sim, ctx, { role = 'owner', ruleName = (k) => `Rule ${k}`, decode = () => null } = {}) {
   if (sim.allowed == null) return { tone: 'unknown', text: 'Can’t preview this payment right now: a circuit couldn’t be read. You can still send it; the blockchain decides.', approveOnly: false };
+  if (sim.reason === REASON.NO_CUSTOM_RULE) return { tone: 'block', text: 'This payment would be blocked: a beneficiary can only spend under a custom rule, and none is turned on.', approveOnly: false };
   if (sim.reason === REASON.NO_CIRCUITS) return { tone: 'block', text: 'This payment would be blocked: no rules are turned on, so nothing can be paid.', approveOnly: false };
   if (sim.allowed) return { tone: 'allow', text: 'This payment would go through: every rule says yes.', approveOnly: false };
   if (sim.reason === REASON.INSUFFICIENT_BALANCE) {

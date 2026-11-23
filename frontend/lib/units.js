@@ -1,3 +1,5 @@
+import { unpackFacts } from './rule-compiler.js';
+
 // Parsing and formatting of the escrow's numeric inputs. Pure functions (no ethers), tested by test/units.test.mjs.
 // Amounts are USDT0 base units (6 decimals). The escrow's pin widths are uint32 for amounts, the cap, the trial limit
 // and the threshold, and uint16 for hours; the UI rejects larger values instead of letting the contract revert or
@@ -94,6 +96,13 @@ export function decodeCircuitInput(kind, hex) {
     case 4: // FREEZE: one byte, 0x01 = frozen
       if (bytes !== 1) return null;
       return { frozen: field(0, 1) };
+    case 5: {
+      // CUSTOM: the 256-bit facts word (CustomFactsPacking, facts v1). Money facts are in cents.
+      if (bytes !== 32) return null;
+      const arr = new Uint8Array(32);
+      for (let i = 0; i < 32; i++) arr[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+      return unpackFacts(arr);
+    }
     default:
       return null;
   }

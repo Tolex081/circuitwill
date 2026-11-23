@@ -1,0 +1,2 @@
+circuitwill-rule-compiler/1
+{"v":1,"tz":0,"appliesTo":["beneficiary"],"anyOf":[{"allOf":[{"fact":"checkin_age_hours","min":4320},{"fact":"spent_month","max":"500.00"}]}]}

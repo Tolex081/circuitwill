@@ -36,6 +36,7 @@
   --k2: #65d2d3; --k2-wash: #15292a; /* Trusted recipients: teal */
   --k3: #f893bc; --k3-wash: #301c26; /* Approval: magenta */
   --k4: #a1c3db; --k4-wash: #1b252d; /* Freeze: ice slate */
+  --k5: #f0a868; --k5-wash: #2d2117; /* Custom rules: copper */
 
   --serif: 'Newsreader', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
   --sans: 'Schibsted Grotesk', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -78,6 +79,7 @@
   --k2: #007172; --k2-wash: #d9eeec;
   --k3: #b82771; --k3-wash: #f9e1ea;
   --k4: #426882; --k4-wash: #e0e9ef;
+  --k5: #9a4f12; --k5-wash: #f7e6d6;
 }
 @media (max-width: 640px) { :root { --gutter: 16px; } }
 
@@ -257,6 +259,7 @@ details.more[open] > summary { color: var(--ink); margin-bottom: 8px; }
 .k2 { --kc: var(--k2); --kw: var(--k2-wash); }
 .k3 { --kc: var(--k3); --kw: var(--k3-wash); }
 .k4 { --kc: var(--k4); --kw: var(--k4-wash); }
+.k5 { --kc: var(--k5); --kw: var(--k5-wash); }
 .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--kc, var(--muted)); flex: none; }
 .dot.neutral { background: transparent; border: 2px solid var(--muted); }
 .rule-name { display: inline-flex; align-items: center; gap: 7px; font-weight: 650; color: var(--kc, var(--ink)); white-space: nowrap; }
@@ -800,3 +803,34 @@ details.more[open] > summary { color: var(--ink); margin-bottom: 8px; }
   .tx-status { right: 16px; left: 16px; bottom: 16px; border-radius: var(--r); }
   .account-chip .role { display: none; }
 }
+
+/* Custom rules (Say it -> See it -> Sign it) and waiting changes */
+.custom-list, .pending-list, .suggestions { list-style: none; margin: 8px 0 14px; padding: 0; }
+.custom-list li, .pending-list li, .suggestions li { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid var(--rule); font-size: 0.92rem; }
+.custom-list li:first-child, .pending-list li:first-child, .suggestions li:first-child { border-top: 0; }
+.custom-list li > div, .pending-list li > div, .suggestions li > span { flex: 1 1 220px; min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.custom-list li.tampered strong { color: var(--block); }
+.custom-list .badge { font-size: 0.78rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--well); color: var(--muted); }
+.pending-list li.ready strong { color: var(--allow); }
+.pending-list li.expired { opacity: 0.7; }
+.pending-list li.empty { color: var(--muted); }
+.pending-list .acts { display: flex; gap: 4px; }
+.cr-suggest { display: grid; gap: 6px; margin: 4px 0 12px; }
+.cr-builder { margin-top: 14px; padding-top: 6px; border-top: 1px dashed var(--rule); display: grid; gap: 10px; }
+.cr-builder textarea, .cr-builder input:not([type=checkbox]), .cr-builder select { width: 100%; }
+.cr-builder textarea { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--rule); background: var(--paper); color: var(--ink); resize: vertical; }
+.cr-builder textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.cr-form { display: grid; gap: 12px; }
+.cr-form[inert] { opacity: 0.5; }
+.cr-form fieldset { border: 1px solid var(--rule); border-radius: 10px; padding: 10px 14px 14px; margin: 0; display: grid; gap: 8px; min-width: 0; }
+.cr-form legend { font-weight: 650; font-size: 0.9rem; padding: 0 4px; }
+.cr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.cr-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.cr-days .day { display: inline-flex; align-items: center; gap: 4px; font-size: 0.85rem; padding: 4px 8px; border: 1px solid var(--rule); border-radius: 999px; cursor: pointer; }
+.cr-days .day:has(input:checked) { background: var(--k5-wash); border-color: var(--k5); color: var(--ink); }
+.cr-draft-note .cant { padding: 10px 14px; border-radius: 10px; background: var(--warn-wash); border: 1px solid var(--warn); font-size: 0.9rem; }
+.cr-draft-note .cant ul { margin: 6px 0; padding-left: 18px; }
+.cr-draft-note .question { font-size: 0.92rem; }
+.cr-readback .readback { font-family: var(--serif); font-size: 1.08rem; line-height: 1.45; margin: 0 0 6px; padding: 12px 14px; border-left: 3px solid var(--k5); background: var(--k5-wash); border-radius: 0 10px 10px 0; }
+.cr-readback .notes { margin: 4px 0 0; padding-left: 18px; font-size: 0.86rem; color: var(--muted); display: grid; gap: 2px; }
+#cr-examples td:last-child { white-space: nowrap; }

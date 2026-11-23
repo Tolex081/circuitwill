@@ -1,8 +1,11 @@
 # Rule suggestions: memory proposes, the owner approves, the escrow waits
 
-**Status: design only. Nothing in this document is implemented.** Written 2026-11-21 against the contracts and
-dashboard at commit `4789d2a`. Nothing is deployed yet, so the contract change below can land before mainnet instead
-of needing a migration.
+**Status (2026-11-23): partly built on branch `feat/custom-rules`, not deployed.** The loosening delay is in
+`CircuitWillEscrow` (`queueChange` / `applyChange` / `cancelChange`, `ruleDelay` 24 hours by default, 7-day apply
+window) and the dashboard's "Waiting changes" card. Suggestions are built as **Suggest rules from my history** in the
+custom rule builder (`frontend/lib/rule-suggest.js`): they come from the escrow's own decision history, stay in the
+browser, only tighten, and never read memos. Suggestions drawn from Walrus Memory are not built. The rest of this
+document is the original design, written 2026-11-21 against commit `4789d2a`.
 
 ## 1. Goal
 

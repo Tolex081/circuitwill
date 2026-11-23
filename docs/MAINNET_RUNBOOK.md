@@ -4,6 +4,11 @@
 or website exists on mainnet for CircuitWill. Every step was rehearsed on a local anvil fork of the latest mainnet
 block (see [Dry run](#dry-run-2026-11-20)); you broadcast each step yourself, from your own Foundry keystore.
 
+> **Re-run the dry run before mainnet.** On 2026-11-23 the escrow gained custom rules (`attachCustomRule`) and the
+> loosening delay (`queueChange` / `applyChange`, 24 h by default). The gas figures and the dry-run result below were
+> measured on the earlier contract and have not been re-measured. The steps themselves are unchanged, except for the
+> larger NAND supply cap in step 1.
+
 Rules for every step:
 
 - **Keys.** Commands sign with `--account <keystore name>` (an encrypted Foundry keystore that asks for its password).
@@ -86,7 +91,7 @@ $Index = (cast call $Factory "cpuCount()(uint256)" --rpc-url $Rpc).Split(" ")[0]
 ```
 
 ```powershell
-cast send $Factory "createCPU(string,string,string,uint256,uint256)" "CircuitWill" "CWILL" "CircuitWill rule circuits" 10000 0 --account $Account --rpc-url $Rpc
+cast send $Factory "createCPU(string,string,string,uint256,uint256)" "CircuitWill" "CWILL" "CircuitWill rule circuits" 1000000 0 --account $Account --rpc-url $Rpc
 ```
 
 Copy the `transactionHash` it prints, then find the new CPU's circuits contract (the **processor**):
@@ -102,10 +107,14 @@ Expect `true`, then `True`. The second check confirms that `cpus($Index)` is the
 not one that someone else created in the same block. If it prints `False`, set
 `$Circuits = cast call $Factory "cpus(uint256)(address)" ([int]$Index + 1) --rpc-url $Rpc` and check again.
 
-The last two `createCPU` arguments are the same as in every rehearsal (`10000`, `0`). With `0` as the NAND mint price,
-anyone can mint NAND on your CPU and pay only TapeOut's protocol fee. This does not affect CircuitWill: a taped-out
-circuit cannot be changed, and the escrow records its `netlistHash` when it is attached. What the `10000` controls is
-not documented; it was not reached in any test.
+The last two `createCPU` arguments are the NAND supply cap (`1000000`) and the NAND mint price (`0`). The cap counts
+every NAND ever minted on this CPU, even ones already burned by a tapeout, and it is fixed for the CPU's life
+(measured on a fork, 2026-11-23: after 10,000 minted, the next `mint(0, 1)` failed with `"supply cap"`). The earlier
+rehearsals used `10000`. That would leave only about 9,155 NAND after the four official circuits, which is about 50
+custom rules (each custom rule is taped out once and uses up to 1,000 NAND). A cap of 1,000,000 worked on the fork.
+With `0` as the NAND mint price, anyone can mint NAND on your CPU and pay only TapeOut's protocol fee. This does not
+affect CircuitWill: a taped-out circuit cannot be changed, and the escrow records its `netlistHash` when it is
+attached.
 
 ## 2. Mint 845 NAND (0.01 BEM)
 
@@ -170,7 +179,10 @@ Expect `0` NAND left. `forge script` keeps its records in `contracts/broadcast/T
 
 `contracts/script/Deploy.s.sol` deploys a `CircuitWillKey` and mints controller NFT #1 to you. It then deploys
 `CircuitWillEscrow` (USDT0, that key, token id, TapeOut factory), sets every parameter, and then attaches each
-circuit. That is 13 transactions for this configuration (14 if you set `AGENT`). The demo values are a cap of 50
+circuit. That is 13 transactions for this configuration (14 if you set `AGENT`). The order matters: until the first
+circuit is attached, every setting applies at once. After that, tightening a rule still applies at once, but any
+change that loosens one (a higher cap, saving a payee, unfreezing, removing a circuit) reverts with
+`LooseningIsDelayed` and has to go through `queueChange`, wait `ruleDelay()` (24 h), then `applyChange`. The demo values are a cap of 50
 USDT0, a trial limit of 5, a 24 h cooling-off and a confirmation threshold of 20:
 
 ```powershell

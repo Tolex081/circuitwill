@@ -427,6 +427,123 @@
             <div class="rule-actions" data-actions></div>
           </article>
 
+          <article class="rule-card k5 custom-card" id="custom-card">
+            <header><span class="dot"></span><h2>Custom rules</h2><span class="state" id="custom-state"></span></header>
+            <p class="rule-now" id="custom-now"></p>
+            <ul id="custom-list" class="custom-list"></ul>
+            <div class="rule-actions">
+              <button id="cr-open" class="btn small primary" type="button">Write a custom rule</button>
+            </div>
+            <div id="cr-suggest-wrap" class="cr-suggest">
+              <button id="cr-suggest" class="btn small ghost" type="button">Suggest a rule from my history</button>
+              <small class="muted">Optional. Worked out on this device from this CircuitWill’s own payments; nothing is sent anywhere.</small>
+              <div id="cr-suggest-out"></div>
+            </div>
+
+            <div id="cr-builder" class="cr-builder hidden">
+              <h3 class="sub-title">1. Say it</h3>
+              <label for="cr-say">Describe the rule in your own words</label>
+              <textarea id="cr-say" rows="2" placeholder="For example: my son can spend up to 10 a day, only on weekdays, never after 9pm. I'm in Lagos."></textarea>
+              <div class="input-row">
+                <button id="cr-draft-local" class="btn small" type="button">Fill in the form from this</button>
+              </div>
+              <details class="more">
+                <summary>Or draft it with Claude (uses your own Anthropic API key)</summary>
+                <p class="small-text">Only your sentence and the list of things a rule can check are sent, to api.anthropic.com. Claude never sees your wallet, your history or any address. The key is used once and kept only in this tab until you close it. You still check everything below before anything is published.</p>
+                <div class="input-row">
+                  <input id="cr-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-label="Anthropic API key" />
+                  <button id="cr-draft-ai" class="btn small" type="button">Draft with Claude</button>
+                </div>
+              </details>
+              <div id="cr-draft-note" class="cr-draft-note"></div>
+
+              <h3 class="sub-title" id="cr-form-title">2. Check the details</h3>
+              <p id="cr-json-note" class="warn-text hidden">This rule has alternatives or conditions the form can’t show. Edit it in “Rule as JSON” below, or <button class="link-btn" type="button" id="cr-json-reset">start again from the form</button>.</p>
+              <form id="cr-form" class="cr-form">
+                <fieldset><legend>Whose payments does it limit?</legend>
+                  <label class="check"><input type="checkbox" id="cr-who-agent" /> My AI helper</label>
+                  <label class="check"><input type="checkbox" id="cr-who-owner" /> Me (the owner)</label>
+                  <label class="check"><input type="checkbox" id="cr-who-beneficiary" /> My beneficiary</label>
+                </fieldset>
+                <fieldset><legend>Money (leave empty for no limit)</legend>
+                  <div class="cr-grid">
+                    <div class="field"><label for="cr-amount">Most per payment</label><span class="affix-wrap"><input id="cr-amount" inputmode="decimal" /><span class="affix">USDT0</span></span></div>
+                    <div class="field"><label for="cr-day">Most per day</label><span class="affix-wrap"><input id="cr-day" inputmode="decimal" /><span class="affix">USDT0</span></span></div>
+                    <div class="field"><label for="cr-week">Most per 7 days</label><span class="affix-wrap"><input id="cr-week" inputmode="decimal" /><span class="affix">USDT0</span></span></div>
+                    <div class="field"><label for="cr-month">Most per calendar month</label><span class="affix-wrap"><input id="cr-month" inputmode="decimal" /><span class="affix">USDT0</span></span></div>
+                    <div class="field"><label for="cr-keep">Always keep at least</label><span class="affix-wrap"><input id="cr-keep" inputmode="decimal" /><span class="affix">USDT0</span></span></div>
+                    <div class="field"><label for="cr-count">Most payments per day</label><input id="cr-count" inputmode="numeric" /></div>
+                  </div>
+                </fieldset>
+                <fieldset><legend>Recipients</legend>
+                  <label class="check"><input type="checkbox" id="cr-trusted" /> Only people on my trusted list</label>
+                  <label class="check"><input type="checkbox" id="cr-paid-before" /> Only people paid from this CircuitWill before</label>
+                  <div class="field narrow"><label for="cr-age">Only people added at least … hours ago</label><input id="cr-age" inputmode="numeric" /></div>
+                  <label class="check"><input type="checkbox" id="cr-approved" /> Only payments I approved first</label>
+                  <label class="check"><input type="checkbox" id="cr-no-withdraw" /> No withdrawals</label>
+                </fieldset>
+                <fieldset><legend>When</legend>
+                  <label class="check"><input type="checkbox" id="cr-time-on" /> Only at certain times</label>
+                  <div class="cr-days" id="cr-days" role="group" aria-label="Days"></div>
+                  <div class="cr-grid">
+                    <div class="field"><label for="cr-from">From</label><input id="cr-from" type="time" step="900" /></div>
+                    <div class="field"><label for="cr-to">Until</label><input id="cr-to" type="time" step="900" /></div>
+                    <div class="field"><label for="cr-tz">Time zone</label><select id="cr-tz"></select></div>
+                  </div>
+                  <small class="muted">15-minute steps. A fixed time zone: summer time is not followed. “Until 00:00” means until midnight.</small>
+                </fieldset>
+                <fieldset><legend>Inheritance</legend>
+                  <div class="field narrow"><label for="cr-checkin">Only after I haven’t checked in for … days</label><input id="cr-checkin" inputmode="decimal" /></div>
+                </fieldset>
+              </form>
+              <details class="more">
+                <summary>Rule as JSON (advanced)</summary>
+                <textarea id="cr-json" rows="8" spellcheck="false" class="mono"></textarea>
+                <button id="cr-json-apply" class="btn small" type="button">Use this JSON</button>
+              </details>
+
+              <h3 class="sub-title">3. See it</h3>
+              <div id="cr-readback" class="cr-readback"></div>
+              <div class="table-wrap"><table class="table" id="cr-examples"></table></div>
+              <p id="cr-size" class="small-text"></p>
+              <button id="cr-xray-btn" class="btn small ghost hidden" type="button">Show the circuit</button>
+              <div id="cr-xray-box"></div>
+
+              <h3 class="sub-title">4. Sign it</h3>
+              <label class="check"><input type="checkbox" id="cr-confirm" /> I’ve read the sentence and the examples, and they say what I mean.</label>
+              <label class="check hidden" id="cr-accept-unsupported-wrap"><input type="checkbox" id="cr-accept-unsupported" /> I understand the words under “We can’t enforce this part” will not be enforced.</label>
+              <details class="more">
+                <summary>Where the circuit is published</summary>
+                <div class="field"><label for="cr-processor">TapeOut processor</label><input id="cr-processor" spellcheck="false" /></div>
+                <div class="field narrow"><label for="cr-existing-id">Already published this exact circuit? Its id</label><input id="cr-existing-id" inputmode="numeric" /></div>
+              </details>
+              <p class="small-text">Publishing costs TapeOut’s fees (about 0.0013 OKB and 0.01 BEM) plus small network fees.</p>
+              <ol id="cr-steps" class="progress"></ol>
+              <p id="cr-publish-note" class="small-text warn-text"></p>
+              <div class="input-row">
+                <button id="cr-publish" class="btn primary" type="button" disabled>Publish and turn on</button>
+                <button id="cr-cancel" class="btn ghost" type="button">Cancel</button>
+              </div>
+            </div>
+
+            <h3 class="sub-title">Check-in</h3>
+            <p class="small-text" id="checkin-now"></p>
+            <div class="rule-actions"><button id="checkin-btn" class="btn small" type="button">I’m here (check in)</button></div>
+            <h3 class="sub-title">Beneficiary</h3>
+            <p class="small-text" id="beneficiary-now"></p>
+            <form id="ben-form" class="input-row">
+              <input id="ben-addr" spellcheck="false" autocomplete="off" placeholder="0x… address" aria-label="Beneficiary address" />
+              <button class="btn small" type="submit">Name beneficiary</button>
+            </form>
+            <div class="rule-actions"><button id="ben-clear" class="btn small ghost" type="button">Remove beneficiary</button></div>
+          </article>
+
+          <article class="rule-card pending-card" id="pending-card">
+            <header><span class="dot neutral"></span><h2>Waiting changes</h2></header>
+            <p class="rule-now" id="pending-now"></p>
+            <ul id="pending-list" class="pending-list"></ul>
+          </article>
+
           <article class="rule-card agent-card">
             <header><span class="dot neutral"></span><h2>AI helper</h2></header>
             <p class="rule-now" id="agent-now"></p>

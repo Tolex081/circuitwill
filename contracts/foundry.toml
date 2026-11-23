@@ -20,6 +20,7 @@ fs_permissions = [
     { access = "read", path = "../circuits/payee-whitelist/build" },
     { access = "read", path = "../circuits/confirmation/build" },
     { access = "read", path = "../circuits/freeze/build" },
+    { access = "read", path = "../circuits/custom/build" },
 ]
 
 [profile.default.fuzz]

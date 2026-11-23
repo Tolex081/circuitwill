@@ -134,7 +134,12 @@ _execute: assign decisionId → reset spentToday if the UTC day changed
 
 | Function | Effect |
 |---|---|
-| `attachCircuit(kind, processor, circuitId)` / `detachCircuit(index)` | At most one circuit per kind, up to 4. `attachCircuit` checks `isCPU`, and that `circuitInfo` matches the kind's pinout (nIn 96 / 97 / 65 / 1, nOut 1, nState 0), and records `keccak256(netlist)` |
+| `attachCircuit(kind, processor, circuitId)` | At most one circuit per official kind. Checks `isCPU`, and that `circuitInfo` matches the kind's pinout (nIn 96 / 97 / 65 / 1, nOut 1, nState 0), and records `keccak256(netlist)`. Each attached circuit gets a `uid` that never changes |
+| `attachCustomRule(processor, circuitId, expectedNetlistHash, specHash, text)` | Up to `MAX_CUSTOM_RULES` (3) custom rules, see [Custom rules](#custom-rules-and-the-loosening-delay). Never delayed: a rule can only block more |
+| `queueChange(kind, target, value)` / `applyChange(id)` / `cancelChange(id)` | The delayed path for any change that loosens (see below). `applyChange` works from `eta` until `eta + 7 days`. Removing a circuit is `queueChange(DETACH_CIRCUIT, 0, uid)` |
+| `setBeneficiary(address)` / `checkIn()` | Beneficiary (setting one is delayed; removing is not) and the owner's "I'm still here" time, read by custom rules |
+| `setRuleDelay(uint256)` | Wait before a loosening change can be applied, 1 hour to 30 days (default 24 hours). Making it longer applies at once |
+| `checkCircuit(uid)` | Anyone can re-hash a circuit's netlist; a mismatch marks it tampered, which blocks every payment |
 | `setDailyCap(uint256)` | Daily Cap parameter, ≤ `2^32-1` |
 | `setPayee(address, bool saved)` / `removePayee(address)` | Payee list. The first `setPayee` records `firstSeen = block.timestamp`; later calls only change `saved`. Removing and re-adding restarts the cooling-off |
 | `setTrialLimit(uint256)` | Largest payment to a payee that is not saved, ≤ `2^32-1` |
@@ -149,11 +154,16 @@ Defaults after deployment are all zero: trial limit 0 (with the whitelist attach
 threshold 0 (with the confirmation circuit attached, every payment needs a confirmation), not frozen.
 
 **Parameter-change timing.** Every parameter and the circuit list are read when `proposePayment` / `withdraw`
-executes. There is no snapshot at proposal time and no timelock: a change applies to the very next decision,
-including one later in the same block. Every change emits an event (`DailyCapSet`, `PayeeSet`, `PayeeRemoved`,
-`TrialLimitSet`, `CoolingOffHoursSet`, `ConfirmationThresholdSet`, `PaymentConfirmed`, `ConfirmationRevoked`,
-`FrozenSet`, `AgentSet`, `EvalGasLimitSet`, `CircuitAttached`, `CircuitDetached`). A decision's `CircuitEvaluated` inputs show exactly
-which values were in force for it.
+executes; there is no snapshot at proposal time. A change that can only let **less** money move (a lower cap,
+freezing, attaching a circuit, a longer delay) applies to the very next decision. A change that can let **more**
+money move (a higher cap or limit, a shorter cooling-off, saving a payee, unfreezing, detaching a circuit, setting a
+beneficiary, a shorter delay) reverts with `LooseningIsDelayed`; queue it with `queueChange`, wait `ruleDelay`
+(24 hours by default), then `applyChange` within 7 days. While no circuit is attached every transfer is blocked
+anyway, so every setter applies at once ("setup"). Every change emits an event (`DailyCapSet`, `PayeeSet`,
+`PayeeRemoved`, `TrialLimitSet`, `CoolingOffHoursSet`, `ConfirmationThresholdSet`, `PaymentConfirmed`,
+`ConfirmationRevoked`, `FrozenSet`, `AgentSet`, `BeneficiarySet`, `CheckedIn`, `RuleDelaySet`, `EvalGasLimitSet`,
+`CircuitAttached`, `CustomRuleAttached`, `CircuitDetached`, `CircuitTampered`, `ChangeQueued`, `ChangeApplied`,
+`ChangeCancelled`). A decision's `CircuitEvaluated` inputs show exactly which values were in force for it.
 
 ### Payment confirmations
 
@@ -227,6 +237,27 @@ One 32-bit comparator plus 3 gates. The pinout document targets fewer than 100 g
 
 nIn = 1, nOut = 1, 1 NAND: `allow = NAND(freeze_flag, freeze_flag)`. Input is one byte, `0x00` (allow) or `0x01`
 (block). It is combinational: the escrow stores the flag, so no LATCH or `step` is used.
+
+### Custom rules and the loosening delay
+
+A custom rule is a NAND circuit the owner builds from a sentence, on top of the four official rules. Design and
+reasoning: [`docs/RULE_BUILDER_RESEARCH.md`](docs/RULE_BUILDER_RESEARCH.md).
+
+- **Pinout ("facts v1", `CustomFactsPacking.sol`).** nIn 256, nOut 1. Money in cents, LSB first: `amount_c` (0-31),
+  spent today / last 7 days / this month **after** this payment (32-127), balance after (128-159), payments today
+  after (160-167), 15-minute slot of the UTC week (168-177), payee trusted / known / paid before (178-180), payee age
+  in hours (181-196), hours since the owner's last check-in (197-212), caller role (213-214: owner, AI helper,
+  beneficiary), confirmed (215), is withdrawal (216). The escrow fills these itself; `customFactsFor` shows them.
+- **Composition.** Payments need every attached circuit to allow (AND), so a custom rule can only block more.
+  Attaching one is never delayed; removing one is a loosening change. Up to 3 custom rules, each at most 1,000 gates.
+- **Pinned twice.** `attachCustomRule` records the netlist hash (and reverts if it differs from the one the owner
+  reviewed) and `specHash = keccak256("circuitwill-rule-compiler/1\n" + canonical JSON of the rule)`. The rule's
+  read-back text (≤ 280 bytes) goes into `CustomRuleAttached`.
+- **Compiler.** `frontend/lib/rule-compiler.js` turns the rule JSON into a netlist with fixed, tested code; no AI is
+  involved. `circuits/custom/build.mjs` builds the example rules, and the tests check every compiled circuit against
+  a plain reference evaluator.
+- **Beneficiary.** An optional third role that can only withdraw through custom rules (for example "after 180 days
+  without a check-in, up to 500 a month"). With no custom rule attached it is always blocked (`NO_CUSTOM_RULE`).
 
 ## Event and re-evaluation format
 
@@ -389,6 +420,8 @@ The page is built for first-time users: plain language first, contract details o
 | Overview | Balance and **Add money** (a plain USDT0 `transfer`), spent today against the daily limit with time to reset, the rules in force as sentences, recent payments |
 | Send | `proposePayment(to, amount, memo)` for the owner or the active agent, with trusted recipients as one-click chips. While you type, a **Preview** card shows what each rule would answer, today's spending and the balance after the payment, and one verdict line (see [Payment preview](#frontend-dashboard) below). Above the approval amount it says the owner must approve this exact payment, and gives the owner an **Approve this payment** button (`confirmPayment`). **Withdraw** for the owner. The result says *Payment sent* or *Payment blocked* and, per rule, why, read from the recorded circuit inputs (for example "Today's spending would reach 60 USDT0, over the 50 USDT0 daily limit"). A blocked payment keeps its details so it can be approved and sent again |
 | Rules | One card per rule: on/off, the setting as a sentence, change it, turn it on (`attachCircuit` from the official set) or off (`detachCircuit`). Trusted recipients (trust, stop trusting, remove, add), approvals for one exact `(to, amount)` (approve, cancel, check), freeze/unfreeze, AI helper (add, change, remove). Owner only; others see the rules read-only |
+| Rules → Custom rules | Four steps. **Say it**: a sentence, turned into the form by an offline drafter, or by Claude (`claude-opus-5-5`, structured output) with the owner's own API key, which is kept in memory only and sent only to `api.anthropic.com`; the AI sees only the sentence and fills in the form, nothing else. Parts it cannot enforce are listed as "We can't enforce this part". **Check the details**: the form itself. **See it**: the rule read back in plain English, examples at each limit with what the compiled circuit answers, gate count, fingerprint and X-ray. **Sign it**: tick the confirmations, then publish (mint NAND if needed, tape out, verify the netlist hash, `attachCustomRule`). Also: **Suggest rules from my history** (local, opt-in, tighten-only, at least 8 payments over 5 days, never reads memos), check-in, and the beneficiary |
+| Rules → Waiting changes | Loosening changes waiting out the delay, with when they can be applied, **Apply** once ready and **Cancel** |
 | History | Every `Decision` (from the `from` block, or the last 10,000 blocks) as *Sent* / *Blocked* with a one-line reason; expand for each rule's answer, **Verify this decision** (re-evaluation), **See the circuits work** (Circuit X-ray, below) and the technical record |
 | Advanced | Contract addresses, attached circuits with processor, id and netlist hash, attach a custom circuit, `evalGasLimit`, and the transaction log with gas |
 | Footer | "Circuits make the final decision", **Verify any decision** by transaction hash (any escrow), **Network settings** |
@@ -649,10 +682,18 @@ Decisions #1 and #2 match the Phase 3 record (same circuits, outcomes, balances 
 - **Fail closed can lock funds.** If the processor stops working, every transfer is blocked, withdrawals included,
   until the controller attaches a working circuit. With Daily Cap, at most `dailyCap` (≤ 4,294.967295 USDT0) can
   leave per UTC day.
-- **The controller can change rules immediately.** For example, they can unfreeze, raise the cap, save a payee
-  (skipping its cooling-off), confirm a payment, or detach circuits, and then withdraw. Per the PRD, the NFT owner
-  controls the rule set. Freeze, cooling-off and confirmation therefore protect against the agent and against
-  mistakes, not against a compromised controller wallet. There is no timelock, but every change is a public event.
+- **The controller can still loosen rules, just not at once.** Unfreezing, raising the cap, saving a payee,
+  detaching a circuit and similar changes wait `ruleDelay` (24 hours by default) and are public events while they
+  wait, so the owner has time to notice and `cancelChange`. Confirming one exact payment still applies at once, and
+  the controller can withdraw immediately within the rules in force. Someone holding a stolen controller NFT can also
+  cancel the owner's changes and queue their own; the delay buys time to move funds out within the limits, not a veto.
+- **Custom rules see only what the escrow knows.** Amounts, totals, times, the recipient list, who is paying and
+  check-ins. A clause such as "only for groceries" cannot be enforced, and the dashboard says so instead of dropping
+  it. Spending totals are escrow-wide (the owner's payments count too). Times are in a fixed UTC offset, with no
+  daylight saving.
+- **Custom rules not yet published on a real chain.** The builder's publish path (mint NAND, tape out, verify the
+  netlist hash, attach) is covered by contract tests and the compiler tests, but has not been clicked through against
+  a running anvil fork. The Claude drafter has only been tested with a fake `fetch`, never with a live API key.
 - **Unknown payees.** A payee that was never added has age 0. With `coolingOffHours == 0` it can receive up to the
   trial limit.
 - **One open confirmation per recipient.** Consuming a confirmation bumps that recipient's nonce, which invalidates any

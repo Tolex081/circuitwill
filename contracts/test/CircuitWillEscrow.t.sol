@@ -216,8 +216,7 @@ contract CircuitWillEscrowTest is Base {
 
     function test_amountAboveUint32IsBlockedNotTruncated() public {
         usdt.mint(address(escrow), 10_000 * USDT);
-        vm.prank(owner);
-        escrow.setDailyCap(U32_MAX);
+        loosenNow(CircuitWillEscrow.ChangeKind.DAILY_CAP, address(0), U32_MAX);
 
         // 2^32 + 1 would truncate to 1 (allowed) if packed carelessly.
         uint256 amount = U32_MAX + 2;
@@ -239,14 +238,15 @@ contract CircuitWillEscrowTest is Base {
         vm.expectRevert(abi.encodeWithSelector(CircuitWillEscrow.ValueOutOfRange.selector, U32_MAX + 1, U32_MAX));
         escrow.setDailyCap(U32_MAX + 1);
         vm.prank(owner);
-        escrow.setDailyCap(U32_MAX); // exactly the max is fine
+        vm.expectRevert(CircuitWillEscrow.LooseningIsDelayed.selector);
+        escrow.setDailyCap(U32_MAX); // in range, but raising the cap waits for the delay
+        loosenNow(CircuitWillEscrow.ChangeKind.DAILY_CAP, address(0), U32_MAX); // exactly the max is fine
         assertEq(escrow.dailyCap(), U32_MAX);
     }
 
     function test_sumOverflowIsBlockedByCircuit() public {
         usdt.mint(address(escrow), 10_000 * USDT);
-        vm.prank(owner);
-        escrow.setDailyCap(U32_MAX);
+        loosenNow(CircuitWillEscrow.ChangeKind.DAILY_CAP, address(0), U32_MAX);
 
         vm.prank(owner);
         (, bool a) = escrow.proposePayment(payee, U32_MAX, "max in one go");
@@ -289,7 +289,7 @@ contract CircuitWillEscrowTest is Base {
         vm.expectRevert(CircuitWillEscrow.NotController.selector);
         escrow.setAgent(stranger);
         vm.expectRevert(CircuitWillEscrow.NotController.selector);
-        escrow.detachCircuit(0);
+        escrow.queueChange(CircuitWillEscrow.ChangeKind.DETACH_CIRCUIT, address(0), 1);
         vm.expectRevert(CircuitWillEscrow.NotController.selector);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(processor), dailyCapId);
         vm.stopPrank();
@@ -329,7 +329,7 @@ contract CircuitWillEscrowTest is Base {
 
         // New owner manages and withdraws (still circuit-gated).
         vm.startPrank(newOwner);
-        escrow.setDailyCap(100 * USDT);
+        loosenNow(CircuitWillEscrow.ChangeKind.DAILY_CAP, address(0), 100 * USDT);
         (, bool a) = escrow.withdraw(newOwner, 100 * USDT);
         assertTrue(a);
         (, a) = escrow.withdraw(newOwner, 1);
@@ -366,8 +366,8 @@ contract CircuitWillEscrowTest is Base {
     function _attachSwitchable(SwitchableProcessor.Mode mode) internal returns (SwitchableProcessor p) {
         p = new SwitchableProcessor();
         factory.register(address(p));
+        detachNow(0);
         vm.startPrank(owner);
-        escrow.detachCircuit(0);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(p), 1);
         vm.stopPrank();
         p.setMode(mode);
@@ -430,8 +430,7 @@ contract CircuitWillEscrowTest is Base {
     }
 
     function test_noCircuitsBlocks() public {
-        vm.prank(owner);
-        escrow.detachCircuit(0);
+        detachNow(0);
         vm.recordLogs();
         vm.prank(owner);
         (, bool a) = escrow.proposePayment(payee, 1, "");
@@ -445,8 +444,7 @@ contract CircuitWillEscrowTest is Base {
     }
 
     function test_insufficientBalanceIsRecorded() public {
-        vm.prank(owner);
-        escrow.setDailyCap(U32_MAX);
+        loosenNow(CircuitWillEscrow.ChangeKind.DAILY_CAP, address(0), U32_MAX);
         vm.recordLogs();
         vm.prank(owner);
         (, bool a) = escrow.proposePayment(payee, 1_001 * USDT, "");
@@ -493,7 +491,7 @@ contract CircuitWillEscrowTest is Base {
         );
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(processor), dailyCapId);
 
-        escrow.detachCircuit(0);
+        detachNow(0);
         assertEq(escrow.circuitCount(), 0);
 
         vm.expectRevert(

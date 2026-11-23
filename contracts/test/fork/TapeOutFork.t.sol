@@ -208,13 +208,13 @@ contract TapeOutForkTest is Test {
         CircuitWillEscrow escrow =
             new CircuitWillEscrow(IERC20(USDT0), IERC721(address(key)), keyId, ITapeOutFactory(FACTORY));
         vm.startPrank(owner);
+        escrow.setDailyCap(50e6); // parameters first: loosening is delayed once a circuit is attached
+        escrow.setConfirmationThreshold(20e6);
+        escrow.setPayee(saved, true);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(circuits), dailyCapId);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.WHITELIST, address(circuits), whitelistId);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.CONFIRMATION, address(circuits), confirmationId);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.FREEZE, address(circuits), freezeId);
-        escrow.setDailyCap(50e6);
-        escrow.setConfirmationThreshold(20e6);
-        escrow.setPayee(saved, true);
         vm.stopPrank();
         deal(USDT0, address(escrow), 200e6);
 
@@ -280,17 +280,17 @@ contract TapeOutForkTest is Test {
             new CircuitWillEscrow(IERC20(USDT0), IERC721(address(key)), keyId, ITapeOutFactory(FACTORY));
 
         vm.startPrank(owner);
-        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(circuits), dailyCapId);
-        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.WHITELIST, address(circuits), whitelistId);
-        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.CONFIRMATION, address(circuits), confirmationId);
-        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.FREEZE, address(circuits), freezeId);
-        escrow.setDailyCap(50e6);
+        escrow.setDailyCap(50e6); // parameters first: loosening is delayed once a circuit is attached
         escrow.setTrialLimit(5e6);
         escrow.setCoolingOffHours(24);
         escrow.setConfirmationThreshold(20e6);
         escrow.setPayee(saved, true);
         escrow.setPayee(owner, true);
         escrow.setPayee(fresh, false);
+        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(circuits), dailyCapId);
+        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.WHITELIST, address(circuits), whitelistId);
+        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.CONFIRMATION, address(circuits), confirmationId);
+        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.FREEZE, address(circuits), freezeId);
         vm.stopPrank();
         deal(USDT0, address(escrow), 200e6);
 
@@ -313,12 +313,15 @@ contract TapeOutForkTest is Test {
         (, a) = escrow.withdraw(owner, 1e6);
         emit log_named_uint("blocked withdraw gas on fork (4 circuits)", g - gasleft());
         assertFalse(a, "freeze blocks withdrawals");
-        escrow.setFrozen(false);
+        // Unfreezing loosens the rules, so it waits ruleDelay (24 h) through the queue.
+        uint256 unfreeze = escrow.queueChange(CircuitWillEscrow.ChangeKind.UNFREEZE, address(0), 0);
         vm.stopPrank();
 
         vm.warp(block.timestamp + 24 hours);
-        vm.prank(owner);
+        vm.startPrank(owner);
+        escrow.applyChange(unfreeze);
         (, a) = escrow.proposePayment(fresh, 5e6, "fork: after cooling-off");
+        vm.stopPrank();
         assertTrue(a, "new payee after cooling-off, within trial limit");
 
         assertEq(IERC20(USDT0).balanceOf(saved), 30e6);
@@ -375,8 +378,8 @@ contract TapeOutForkTest is Test {
             new CircuitWillEscrow(IERC20(USDT0), IERC721(address(key)), keyId, ITapeOutFactory(FACTORY));
 
         vm.startPrank(owner);
-        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(circuits), dailyCapId);
         escrow.setDailyCap(50e6);
+        escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, address(circuits), dailyCapId);
         vm.stopPrank();
         deal(USDT0, address(escrow), 100e6);
 

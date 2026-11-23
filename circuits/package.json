@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "node daily-cap/build.mjs && node payee-whitelist/build.mjs && node confirmation/build.mjs && node freeze/build.mjs",
+    "build": "node daily-cap/build.mjs && node payee-whitelist/build.mjs && node confirmation/build.mjs && node freeze/build.mjs && node custom/build.mjs",
     "test": "node --test test/*.test.mjs"
   }
 }

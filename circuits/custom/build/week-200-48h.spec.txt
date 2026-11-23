@@ -1,0 +1,2 @@
+circuitwill-rule-compiler/1
+{"v":1,"tz":0,"appliesTo":["owner","agent","beneficiary"],"anyOf":[{"allOf":[{"fact":"spent_7d","max":"200.00"},{"fact":"payee_age_hours","min":48}]}]}

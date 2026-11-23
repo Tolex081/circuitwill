@@ -32,18 +32,21 @@ contract MultiCircuitTest is Base {
     uint8 internal constant K_FREEZE = uint8(CircuitWillEscrow.CircuitKind.FREEZE);
 
     function setUp() public override {
-        super.setUp(); // Daily Cap attached at index 0, cap 50, agent set
+        super.setUp(); // Daily Cap attached at index 0, cap 50, agent set, parameters below already set
         vm.startPrank(owner);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.WHITELIST, address(processor), whitelistId);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.CONFIRMATION, address(processor), confirmationId);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.FREEZE, address(processor), freezeId);
+        vm.stopPrank();
+    }
+
+    function configureBeforeAttach() internal override {
         escrow.setTrialLimit(TRIAL);
         escrow.setCoolingOffHours(COOLING);
         escrow.setConfirmationThreshold(THRESHOLD);
         escrow.setPayee(payee, true);
         escrow.setPayee(payee2, true);
         escrow.setPayee(owner, true);
-        vm.stopPrank();
     }
 
     // ================================================================ helpers
@@ -98,6 +101,11 @@ contract MultiCircuitTest is Base {
         assertEq(uint8(CircuitWillEscrow.CircuitKind.WHITELIST), 2);
         assertEq(uint8(CircuitWillEscrow.CircuitKind.CONFIRMATION), 3);
         assertEq(uint8(CircuitWillEscrow.CircuitKind.FREEZE), 4);
+        assertEq(uint8(CircuitWillEscrow.CircuitKind.CUSTOM), 5);
+        assertEq(uint8(CircuitWillEscrow.Reason.TRANSFER_FAILED), 6);
+        assertEq(uint8(CircuitWillEscrow.Reason.NO_CUSTOM_RULE), 7);
+        assertEq(uint8(CircuitWillEscrow.ChangeKind.DAILY_CAP), 0);
+        assertEq(uint8(CircuitWillEscrow.ChangeKind.BENEFICIARY), 8);
     }
 
     function test_allowedPaymentRecordsAllFourInputs() public {
@@ -188,8 +196,7 @@ contract MultiCircuitTest is Base {
         assertFalse(escrow.isPaymentConfirmed(payee, 30 * USDT));
 
         // Cannot be reused, not even by re-submitting the old hash.
-        vm.prank(owner);
-        escrow.setDailyCap(U32_MAX);
+        loosenNow(CircuitWillEscrow.ChangeKind.DAILY_CAP, address(0), U32_MAX);
         assertFalse(_propose(payee, 30 * USDT), "reuse blocked");
         vm.prank(owner);
         escrow.confirmPayment(h); // stale nonce: does not match the next payment
@@ -245,8 +252,7 @@ contract MultiCircuitTest is Base {
         assertEq(countTopic(logs, CircuitWillEscrow.ConfirmationConsumed.selector), 0);
         assertTrue(escrow.isPaymentConfirmed(payee, 40 * USDT), "still available");
 
-        vm.prank(owner);
-        escrow.setDailyCap(100 * USDT); // applies to the very next decision
+        loosenNow(CircuitWillEscrow.ChangeKind.DAILY_CAP, address(0), 100 * USDT); // applies once the delay is over
         assertTrue(_propose(payee, 40 * USDT));
         assertEq(escrow.paymentNonce(payee), 1);
         assertEq(escrow.spentToday(), 55 * USDT);
@@ -381,7 +387,9 @@ contract MultiCircuitTest is Base {
         assertEq(escrow.paymentNonce(owner), 0, "blocked: confirmation not consumed");
 
         vm.prank(owner);
-        escrow.setFrozen(false);
+        vm.expectRevert(CircuitWillEscrow.LooseningIsDelayed.selector);
+        escrow.setFrozen(false); // unfreezing waits for the delay
+        loosenNow(CircuitWillEscrow.ChangeKind.UNFREEZE, address(0), 0);
         vm.prank(owner);
         (, a) = escrow.withdraw(owner, 30 * USDT);
         assertTrue(a, "unfrozen");
@@ -392,13 +400,12 @@ contract MultiCircuitTest is Base {
         vm.expectRevert(CircuitWillEscrow.NotController.selector);
         escrow.setFrozen(true);
 
-        vm.prank(owner);
-        escrow.detachCircuit(3); // Freeze
+        detachNow(3); // Freeze
         vm.prank(owner);
         vm.expectRevert(CircuitWillEscrow.FreezeCircuitNotAttached.selector);
         escrow.setFrozen(true);
         vm.prank(owner);
-        escrow.setFrozen(false); // unfreezing is always possible
+        escrow.setFrozen(false); // not frozen: a no-op, allowed at once
     }
 
     // ================================================================ payee whitelist + cooling-off
@@ -427,8 +434,7 @@ contract MultiCircuitTest is Base {
         vm.warp(T0 + 30 days);
         assertFalse(_propose(newPayee, TRIAL + 1), "trial limit applies until saved");
 
-        vm.prank(owner);
-        escrow.setPayee(newPayee, true);
+        loosenNow(CircuitWillEscrow.ChangeKind.SAVE_PAYEE, newPayee, 0);
         assertTrue(_propose(newPayee, TRIAL + 1), "saved");
         assertEq(usdt.balanceOf(newPayee), 2 * TRIAL + 1);
     }
@@ -440,8 +446,7 @@ contract MultiCircuitTest is Base {
         assertEq(cs[1].input, packWhitelist(false, 0, 1, TRIAL, COOLING));
         assertEq(cs[1].status, D);
         // With cooling-off 0, an unknown payee gets the trial limit (age 0 >= 0).
-        vm.prank(owner);
-        escrow.setCoolingOffHours(0);
+        loosenNow(CircuitWillEscrow.ChangeKind.COOLING_OFF_HOURS, address(0), 0);
         assertTrue(_propose(stranger, 1));
         assertFalse(_propose(stranger, TRIAL + 1));
     }
@@ -458,7 +463,7 @@ contract MultiCircuitTest is Base {
         vm.warp(T0 + 10 hours);
         vm.prank(owner);
         escrow.setPayee(newPayee, false); // no-op on firstSeen
-        (uint64 firstSeen,) = escrow.payees(newPayee);
+        (uint64 firstSeen,,) = escrow.payees(newPayee);
         assertEq(firstSeen, T0);
         assertEq(escrow.payeeAgeHours(newPayee), 10);
 
@@ -467,7 +472,7 @@ contract MultiCircuitTest is Base {
         assertEq(escrow.payeeAgeHours(newPayee), 0);
         vm.prank(owner);
         escrow.setPayee(newPayee, false);
-        (firstSeen,) = escrow.payees(newPayee);
+        (firstSeen,,) = escrow.payees(newPayee);
         assertEq(firstSeen, T0 + 10 hours);
         vm.warp(T0 + 30 hours);
         assertFalse(_propose(newPayee, 1), "cooling-off restarted at re-add");
@@ -505,9 +510,9 @@ contract MultiCircuitTest is Base {
         vm.expectRevert(CircuitWillEscrow.ZeroAddress.selector);
         escrow.setPayee(address(0), true);
 
-        escrow.setTrialLimit(U32_MAX);
+        loosenNow(CircuitWillEscrow.ChangeKind.TRIAL_LIMIT, address(0), U32_MAX);
         escrow.setCoolingOffHours(type(uint16).max);
-        escrow.setConfirmationThreshold(U32_MAX);
+        loosenNow(CircuitWillEscrow.ChangeKind.CONFIRMATION_THRESHOLD, address(0), U32_MAX);
         vm.stopPrank();
         assertEq(escrow.trialLimit(), U32_MAX);
         assertEq(escrow.coolingOffHours(), type(uint16).max);
@@ -536,10 +541,10 @@ contract MultiCircuitTest is Base {
 
     function test_attachChecksPinoutPerKind() public {
         vm.startPrank(owner);
-        escrow.detachCircuit(3);
-        escrow.detachCircuit(2);
-        escrow.detachCircuit(1);
-        escrow.detachCircuit(0);
+        detachNow(3);
+        detachNow(2);
+        detachNow(1);
+        detachNow(0);
         vm.expectRevert(abi.encodeWithSelector(CircuitWillEscrow.PinoutMismatch.selector, 65, 1, 0));
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.WHITELIST, address(processor), confirmationId);
         vm.expectRevert(abi.encodeWithSelector(CircuitWillEscrow.PinoutMismatch.selector, 97, 1, 0));
@@ -566,7 +571,7 @@ contract MultiCircuitTest is Base {
         p.setNIn(97);
         factory.register(address(p));
         vm.startPrank(owner);
-        escrow.detachCircuit(1); // Freeze moves to index 1
+        detachNow(1); // Freeze moves to index 1
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.WHITELIST, address(p), 1); // index 3
         vm.stopPrank();
         p.setMode(mode);
@@ -618,7 +623,7 @@ contract MultiCircuitTest is Base {
 
         // Change every parameter afterwards: the recorded inputs, not current state, are what was evaluated.
         vm.startPrank(owner);
-        escrow.setFrozen(false);
+        loosenNow(CircuitWillEscrow.ChangeKind.UNFREEZE, address(0), 0);
         escrow.setDailyCap(1);
         escrow.setTrialLimit(0);
         escrow.setConfirmationThreshold(0);
@@ -746,7 +751,7 @@ contract MultiCircuitTest is Base {
         factory.register(proxied);
         vm.startPrank(owner);
         for (uint256 i; i < 4; ++i) {
-            escrow.detachCircuit(0);
+            detachNow(0);
         }
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.DAILY_CAP, proxied, dailyCapId);
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.WHITELIST, proxied, whitelistId);

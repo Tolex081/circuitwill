@@ -113,9 +113,10 @@ try {
 
     # --- 1. A CPU with enough NAND transistors
     Set-TokenBalance $Bem $BemBalanceSlot $designer 100000000000000
+    Set-TokenBalance $Bem $BemBalanceSlot $owner 100000000000 # 1,000 BEM so the owner can publish custom rules from the dashboard
     Send-Tx $designer $Bem "approve(address,uint256)" $Factory $MaxUint
-    $cpu = Invoke-Cast call $Factory "createCPU(string,string,string,uint256,uint256)(address,address)" "CircuitWill Dashboard" CWD dashboard 10000 0 --from $designer --rpc-url $Rpc
-    Send-Tx $designer $Factory "createCPU(string,string,string,uint256,uint256)" "CircuitWill Dashboard" CWD dashboard 10000 0
+    $cpu = Invoke-Cast call $Factory "createCPU(string,string,string,uint256,uint256)(address,address)" "CircuitWill Dashboard" CWD dashboard 1000000 0 --from $designer --rpc-url $Rpc
+    Send-Tx $designer $Factory "createCPU(string,string,string,uint256,uint256)" "CircuitWill Dashboard" CWD dashboard 1000000 0
     $transistors = $cpu[0].Trim()
     $circuits = $cpu[1].Trim()
     if ((Invoke-Cast call $Factory "isCPU(address)(bool)" $circuits --rpc-url $Rpc).Trim() -ne "true") { throw "new CPU is not registered" }
@@ -153,6 +154,7 @@ try {
         forkBlock   = [int](Invoke-Cast block-number --rpc-url $Rpc).Trim()
         token       = $Usdt0
         factory     = $Factory
+        bem         = $Bem
         processor   = $circuits
         circuitIds  = [ordered]@{ dailyCap = $ids["daily-cap"]; whitelist = $ids["payee-whitelist"]; confirmation = $ids["confirmation"]; freeze = $ids["freeze"] }
         accounts    = [ordered]@{ owner = $owner; agent = $agent; payee = $payee; newPayee = $stranger; designer = $designer }

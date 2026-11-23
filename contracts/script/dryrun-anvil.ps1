@@ -181,7 +181,7 @@ try {
     Send-Tx "BEM approve factory, exactly deployFee" $controller $Bem "approve(address,uint256)" $Factory $live.deployFee | Out-Null
     $bem0 = Get-Bal $Bem $controller
     $index = Read-Uint $Factory "cpuCount()(uint256)"
-    $r = Send-Tx "createCPU" $controller $Factory "createCPU(string,string,string,uint256,uint256)" "CircuitWill" "CWILL" "CircuitWill rule circuits" 10000 0
+    $r = Send-Tx "createCPU" $controller $Factory "createCPU(string,string,string,uint256,uint256)" "CircuitWill" "CWILL" "CircuitWill rule circuits" 1000000 0
     $circuits = ("" + (Invoke-Cast call $Factory "cpus(uint256)(address)" $index --rpc-url $Rpc)).Trim()
     Assert-Equal ("" + (Invoke-Cast call $Factory "isCPU(address)(bool)" $circuits --rpc-url $Rpc)).Trim() "true" "factory.cpus(cpuCount before) is a CPU"
     $logAddrs = @($r.logs | ForEach-Object { $_.address.ToLower() })

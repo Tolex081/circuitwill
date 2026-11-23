@@ -2,7 +2,7 @@
 
 **Short answer: yes, build it, but in the right order.** The AI should only fill in a form. Fixed, tested code turns that form into a circuit. The owner confirms the result using examples. The chain then enforces it. Nobody has shipped an "English to enforced on-chain rule" product, and the failures in nearby products show where the danger is. Money was lost when AI output was allowed to act directly. It was not lost when a hard, fixed limit sat between the AI and the money. The cost is tiny: about **$0.11 to publish a rule** and well under **one cent of network fee per payment** (measured on a copy of X Layer mainnet on 2026-11-23). The real blockers sit in the contract and the deploy plan, not in cost. The escrow cannot be upgraded after launch. So the "custom rule" slot and the 24-hour delay on loosening a rule must ship together, in one contract change, **before mainnet**. Before that launch, the TapeOut circuit processor also has to be created with a much larger NAND supply.
 
-This is a research and design document. Nothing described here has been built.
+This is a research and design document. **Update 2026-11-23:** Steps A to E are built on branch `feat/custom-rules` (contract custom slot and loosening delay, compiler, form builder, AI drafting, history suggestions), not deployed. See the README section "Custom rules and the loosening delay". The gas and cost figures below were measured before that contract change and need re-measuring.
 
 ---
 
