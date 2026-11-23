@@ -32,6 +32,9 @@ contract CircuitWillKeyTest is Test {
         assertTrue(_contains(svg, "Whoever holds this key controls a CircuitWill."));
         assertTrue(_contains(svg, "Transfer it only to hand over control."));
         assertTrue(_endsWith(svg, "</svg>"));
+        // Chain-neutral: the art is fixed at deployment and the key may be deployed on any EVM chain.
+        assertFalse(_contains(svg, "LAYER"));
+        assertFalse(_contains(description, "Layer"));
     }
 
     function test_tokenURI_showsEachKeysOwnNumber() public {

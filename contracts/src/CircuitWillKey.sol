@@ -16,7 +16,7 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 contract CircuitWillKey is ERC721 {
     uint256 public totalMinted;
 
-    string private constant DESCRIPTION = "The controller key of a CircuitWill on X Layer. Whoever holds this NFT controls "
+    string private constant DESCRIPTION = "The controller key of a CircuitWill. Whoever holds this NFT controls "
         "the will's rules and can withdraw its money. Selling or transferring it hands over that control.";
 
     constructor() ERC721("CircuitWill Key", "CWKEY") {}
@@ -53,7 +53,6 @@ contract CircuitWillKey is ERC721 {
             "<g fill='none' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round' transform='translate(44 44) scale(2.5)'>",
             "<path d='M9.5 8.5h6a7.5 7.5 0 0 1 0 15h-6zM3.5 12.5h6M3.5 19.5h6' stroke='#e8e4dc'/>",
             "<circle cx='25.25' cy='16' r='2.25' stroke='#9cb2ff'/></g>",
-            "<text x='352' y='88' text-anchor='end' font-family='Menlo,Consolas,monospace' font-size='13' letter-spacing='2' fill='#a0a7a2'>X LAYER</text>",
             "<text x='48' y='196' font-family='Georgia,serif' font-size='32' fill='#e8e4dc'>CircuitWill Key</text>",
             "<text x='48' y='268' font-family='Menlo,Consolas,monospace' font-size='60' fill='#9cb2ff'>#",
             id,
