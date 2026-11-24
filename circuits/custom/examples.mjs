@@ -53,4 +53,12 @@ export const EXAMPLES = Object.freeze({
     appliesTo: ['beneficiary'],
     anyOf: [{ allOf: [{ fact: 'checkin_age_hours', min: 4320 }, { fact: 'spent_month', max: '500' }] }],
   },
+  // "I can spend up to 10 a day" (limits only the owner: used to test that naming an AI helper, which this rule
+  // does not limit, waits like any loosening change).
+  'owner-10': {
+    v: 1,
+    tz: 0,
+    appliesTo: ['owner'],
+    anyOf: [{ allOf: [{ fact: 'spent_day', max: '10' }] }],
+  },
 });

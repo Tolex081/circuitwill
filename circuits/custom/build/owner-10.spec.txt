@@ -1,0 +1,2 @@
+circuitwill-rule-compiler/1
+{"v":1,"tz":0,"appliesTo":["owner"],"anyOf":[{"allOf":[{"fact":"spent_day","max":"10.00"}]}]}

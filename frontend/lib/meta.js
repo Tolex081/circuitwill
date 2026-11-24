@@ -15,7 +15,11 @@ export const CHANGE = {
   DETACH_CIRCUIT: 6,
   RULE_DELAY: 7,
   BENEFICIARY: 8,
+  AGENT: 9,
 };
+
+/// CircuitWillEscrow.customAppliesTo bits: which roles a custom rule limits.
+export const APPLIES_TO = { OWNER: 1, AGENT: 2, BENEFICIARY: 4 };
 export const CHANGE_NAME = Object.keys(CHANGE);
 
 /// caller_role in the custom-rule facts (CircuitWillEscrow.roleOf).

@@ -135,7 +135,7 @@ _execute: assign decisionId → reset spentToday if the UTC day changed
 | Function | Effect |
 |---|---|
 | `attachCircuit(kind, processor, circuitId)` | At most one circuit per official kind. Checks `isCPU`, and that `circuitInfo` matches the kind's pinout (nIn 96 / 97 / 65 / 1, nOut 1, nState 0), and records `keccak256(netlist)`. Each attached circuit gets a `uid` that never changes |
-| `attachCustomRule(processor, circuitId, expectedNetlistHash, specHash, text)` | Up to `MAX_CUSTOM_RULES` (3) custom rules, see [Custom rules](#custom-rules-and-the-loosening-delay). Never delayed: a rule can only block more |
+| `attachCustomRule(processor, circuitId, expectedNetlistHash, specHash, appliesTo, text)` | Up to `MAX_CUSTOM_RULES` (3) custom rules, see [Custom rules](#custom-rules-and-the-loosening-delay). `appliesTo` says which roles the rule limits (owner 1, agent 2, beneficiary 4; 1 to 7). Never delayed: a rule can only block more |
 | `queueChange(kind, target, value)` / `applyChange(id)` / `cancelChange(id)` | The delayed path for any change that loosens (see below). `applyChange` works from `eta` until `eta + 7 days`. Removing a circuit is `queueChange(DETACH_CIRCUIT, 0, uid)` |
 | `setBeneficiary(address)` / `checkIn()` | Beneficiary (setting one is delayed; removing is not) and the owner's "I'm still here" time, read by custom rules |
 | `setRuleDelay(uint256)` | Wait before a loosening change can be applied, 1 hour to 30 days (default 24 hours). Making it longer applies at once |
@@ -147,7 +147,7 @@ _execute: assign decisionId → reset spentToday if the UTC day changed
 | `setConfirmationThreshold(uint256)` | Payments above it need a confirmation, ≤ `2^32-1` |
 | `confirmPayment(bytes32 paymentHash)` / `revokeConfirmation(bytes32)` | Confirm (or withdraw the confirmation of) one exact payment, see below |
 | `setFrozen(bool)` | Freeze flag. Freezing requires an attached Freeze circuit (`FreezeCircuitNotAttached`), because the flag has no effect without one; unfreezing is always possible |
-| `setAgent(address)` | Agent key (or `address(0)` to clear) |
+| `setAgent(address)` | Agent key (or `address(0)` to clear). Naming one is delayed (`queueChange(AGENT, agent, 0)`) while some custom rule limits the owner but not the agent, because the new agent would escape that rule |
 | `setEvalGasLimit(uint256)` | Gas budget per eval, 100,000 to 30,000,000 (default 3,000,000). A circuit that uses it all is recorded as REVERTED |
 
 Defaults after deployment are all zero: trial limit 0 (with the whitelist attached, only saved payees can be paid),
@@ -245,7 +245,7 @@ reasoning: [`docs/RULE_BUILDER_RESEARCH.md`](docs/RULE_BUILDER_RESEARCH.md).
 
 - **Pinout ("facts v1", `CustomFactsPacking.sol`).** nIn 256, nOut 1. Money in cents, LSB first: `amount_c` (0-31),
   spent today / last 7 days / this month **after** this payment (32-127), balance after (128-159), payments today
-  after (160-167), 15-minute slot of the UTC week (168-177), payee trusted / known / paid before (178-180), payee age
+  after (160-167), 15-minute slot of the UTC week (168-177), payee trusted (178) / known (179) / paid before (180), payee age
   in hours (181-196), hours since the owner's last check-in (197-212), caller role (213-214: owner, AI helper,
   beneficiary), confirmed (215), is withdrawal (216). The escrow fills these itself; `customFactsFor` shows them.
 - **Composition.** Payments need every attached circuit to allow (AND), so a custom rule can only block more.
@@ -253,11 +253,17 @@ reasoning: [`docs/RULE_BUILDER_RESEARCH.md`](docs/RULE_BUILDER_RESEARCH.md).
 - **Pinned twice.** `attachCustomRule` records the netlist hash (and reverts if it differs from the one the owner
   reviewed) and `specHash = keccak256("circuitwill-rule-compiler/1\n" + canonical JSON of the rule)`. The rule's
   read-back text (≤ 280 bytes) goes into `CustomRuleAttached`.
+- **Who it limits.** Each rule declares `appliesTo` (owner 1, agent 2, beneficiary 4) at attach time, stored in
+  `customAppliesTo(uid)`. The compiled circuit allows anyone outside its `appliesTo`; the escrow uses the mask for the
+  two checks below.
 - **Compiler.** `frontend/lib/rule-compiler.js` turns the rule JSON into a netlist with fixed, tested code; no AI is
-  involved. `circuits/custom/build.mjs` builds the example rules, and the tests check every compiled circuit against
+  involved. Facts the owner can switch on instantly can only be *required*, never forbidden: `payee_trusted`,
+  `payee_paid_before` and `confirmed` accept `is: true` only, and `payee_known` and `caller` are not offered
+  (otherwise removing a recipient or naming a helper would loosen a rule without the delay). `circuits/custom/build.mjs` builds the example rules, and the tests check every compiled circuit against
   a plain reference evaluator.
 - **Beneficiary.** An optional third role that can only withdraw through custom rules (for example "after 180 days
-  without a check-in, up to 500 a month"). With no custom rule attached it is always blocked (`NO_CUSTOM_RULE`).
+  without a check-in, up to 500 a month"). Unless some attached custom rule limits the beneficiary (`appliesTo`
+  includes 4), it is always blocked (`NO_CUSTOM_RULE`).
 
 ## Event and re-evaluation format
 

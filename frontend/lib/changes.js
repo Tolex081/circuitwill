@@ -17,7 +17,8 @@ const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '—');
 /// True when the contract would refuse this change as an instant setter call. `live` = at least one circuit is
 /// attached (before that the escrow is in setup, every transfer is blocked, and every change applies at once).
 /// `cur` holds the current values: dailyCap, trialLimit, coolingOffHours, confirmationThreshold, frozen, ruleDelay,
-/// and `payeeSaved` for SAVE_PAYEE.
+/// `payeeSaved` for SAVE_PAYEE, and for AGENT `target` (the new helper) and `ownerOnlyRule` (some custom rule limits
+/// the owner but not the helper, so a new helper would escape it).
 export function isLoosening(kind, value, cur, { live = true } = {}) {
   if (!live) return false;
   switch (kind) {
@@ -35,6 +36,8 @@ export function isLoosening(kind, value, cur, { live = true } = {}) {
       return !!cur.frozen;
     case CHANGE.RULE_DELAY:
       return big(value) < big(cur.ruleDelay);
+    case CHANGE.AGENT:
+      return !!cur.ownerOnlyRule && !!cur.target && !/^0x0{40}$/i.test(cur.target);
     case CHANGE.DETACH_CIRCUIT:
     case CHANGE.BENEFICIARY:
       return true; // removing a circuit or naming a beneficiary always waits
@@ -80,6 +83,8 @@ export function describeChange(c, { circuitName = (uid) => `rule #${uid}` } = {}
       return `Shorten the waiting time for rule changes to ${durationText(v)}`;
     case CHANGE.BENEFICIARY:
       return c.target && !/^0x0{40}$/i.test(c.target) ? `Name ${shortAddr(c.target)} as beneficiary` : 'Remove the beneficiary';
+    case CHANGE.AGENT:
+      return c.target && !/^0x0{40}$/i.test(c.target) ? `Name ${shortAddr(c.target)} as AI helper` : 'Remove the AI helper';
     default:
       return `Unknown change (${c.kind})`;
   }

@@ -25,7 +25,8 @@ import {SpendWindows} from "./libraries/SpendWindows.sol";
 ///      Parameter-change timing: every parameter is read when `proposePayment` / `withdraw` executes (no snapshot at
 ///      proposal time). Changes that can only let less money move apply at once. Changes that can let more money move
 ///      ("loosening": a higher cap or limit, a shorter cooling-off, saving a payee, unfreezing, detaching a circuit,
-///      setting a beneficiary, shortening the delay) revert with `LooseningIsDelayed` and must go through
+///      setting a beneficiary, shortening the delay, naming an agent while a custom rule limits the owner but not
+///      the agent) revert with `LooseningIsDelayed` and must go through
 ///      `queueChange` -> wait `ruleDelay` -> `applyChange`. While no circuit is attached every transfer is already
 ///      blocked (`NO_CIRCUITS`), so all setters apply at once ("setup"). Every change emits an event.
 ///
@@ -66,7 +67,7 @@ contract CircuitWillEscrow is ReentrancyGuard {
         NO_CIRCUITS, // no circuits attached: nothing can authorize a transfer
         INSUFFICIENT_BALANCE, // circuits allowed, but the escrow does not hold enough tokens
         TRANSFER_FAILED, // circuits allowed, but the token transfer failed
-        NO_CUSTOM_RULE // the beneficiary proposed, but no custom rule is attached to say what it may do
+        NO_CUSTOM_RULE // the beneficiary proposed, but no attached custom rule limits the beneficiary
     }
 
     /// @dev Values are part of the public event format. Append only, never reorder.
@@ -79,7 +80,8 @@ contract CircuitWillEscrow is ReentrancyGuard {
         UNFREEZE,
         DETACH_CIRCUIT,
         RULE_DELAY,
-        BENEFICIARY
+        BENEFICIARY,
+        AGENT
     }
 
     struct AttachedCircuit {
@@ -107,8 +109,8 @@ contract CircuitWillEscrow is ReentrancyGuard {
     }
 
     /// @notice A loosening change waiting for `ruleDelay`. `value` is the new value; for DETACH_CIRCUIT it is the
-    ///         circuit uid, for RULE_DELAY the new delay in seconds. `target` is the payee (SAVE_PAYEE) or the new
-    ///         beneficiary (BENEFICIARY), else zero.
+    ///         circuit uid, for RULE_DELAY the new delay in seconds. `target` is the payee (SAVE_PAYEE), the new
+    ///         beneficiary (BENEFICIARY) or the new agent (AGENT), else zero.
     struct PendingChange {
         ChangeKind kind;
         uint64 eta; // earliest apply time; zero means no such change
@@ -147,6 +149,11 @@ contract CircuitWillEscrow is ReentrancyGuard {
     uint32 public constant CUSTOM_FACTS_VERSION = CustomFactsPacking.FACTS_VERSION;
     /// @notice Token base units per cent in the custom-rule facts (USDT0 has 6 decimals).
     uint256 public constant UNITS_PER_CENT = 10_000;
+    /// @notice Bits of a custom rule's `appliesTo`: the roles whose payments the rule limits. A role the rule does not
+    ///         list passes it untouched (the compiled circuit allows any caller_role outside the list).
+    uint8 public constant APPLIES_TO_OWNER = 1;
+    uint8 public constant APPLIES_TO_AGENT = 2;
+    uint8 public constant APPLIES_TO_BENEFICIARY = 4;
 
     uint256 public constant MAX_MEMO_BYTES = 256;
     uint256 public constant SECONDS_PER_DAY = 86_400;
@@ -191,6 +198,10 @@ contract CircuitWillEscrow is ReentrancyGuard {
     uint256 public customRuleCount;
     /// @notice Hash of the canonical rule specification a custom rule was compiled from, by circuit uid.
     mapping(uint64 uid => bytes32) public customSpecHash;
+    /// @notice Roles a custom rule limits (`APPLIES_TO_*` bits), as declared by the owner at attach time. The escrow
+    ///         cannot read this from the circuit; the rule builder takes it from the rule's `appliesTo`, which the
+    ///         specHash also commits to. It decides when a beneficiary may act and when naming an agent is delayed.
+    mapping(uint64 uid => uint8) public customAppliesTo;
 
     /// @notice Daily Cap parameter in token base units (<= type(uint32).max).
     uint256 public dailyCap;
@@ -235,7 +246,8 @@ contract CircuitWillEscrow is ReentrancyGuard {
     address public agentSetBy;
 
     /// @notice Beneficiary that may call `proposePayment` (for example under an inheritance rule). Active only while
-    ///         `beneficiarySetBy` still owns the controller NFT, and only allowed while a custom rule is attached.
+    ///         `beneficiarySetBy` still owns the controller NFT, and only allowed while an attached custom rule limits
+    ///         the beneficiary (`APPLIES_TO_BENEFICIARY`).
     address public beneficiary;
     address public beneficiarySetBy;
     /// @notice Last `checkIn` by the controller (deployment time until the first one).
@@ -315,7 +327,7 @@ contract CircuitWillEscrow is ReentrancyGuard {
     /// @notice Emitted after `CircuitAttached` for a custom rule. `text` is the owner-facing English description the
     ///         rule was confirmed with; `specHash` commits to the canonical rule specification and compiler version.
     event CustomRuleAttached(
-        uint64 indexed uid, bytes32 netlistHash, bytes32 specHash, uint32 factsVersion, string text
+        uint64 indexed uid, bytes32 netlistHash, bytes32 specHash, uint32 factsVersion, uint8 appliesTo, string text
     );
     event CircuitDetached(
         uint256 indexed index, CircuitKind kind, address indexed processor, uint256 indexed circuitId, uint64 uid
@@ -457,8 +469,11 @@ contract CircuitWillEscrow is ReentrancyGuard {
 
         (EvalResult[] memory results, Reason reason) = _evaluateAll(decisionId, ctx);
 
-        // A beneficiary has no default powers: some custom rule must be attached to say what it may do.
-        if (reason == Reason.NONE && customRuleCount == 0 && roleOf(msg.sender) == 2) reason = Reason.NO_CUSTOM_RULE;
+        // A beneficiary has no default powers: an attached custom rule must limit the beneficiary to say what it may
+        // do. A rule that only limits other roles lets the beneficiary through, so it does not count.
+        if (reason == Reason.NONE && roleOf(msg.sender) == 2 && !_someRuleLimits(APPLIES_TO_BENEFICIARY)) {
+            reason = Reason.NO_CUSTOM_RULE;
+        }
         if (reason == Reason.NONE && token.balanceOf(address(this)) < amount) reason = Reason.INSUFFICIENT_BALANCE;
         if (reason == Reason.NONE && !_tryTransfer(to, amount)) reason = Reason.TRANSFER_FAILED;
 
@@ -778,11 +793,12 @@ contract CircuitWillEscrow is ReentrancyGuard {
     }
 
     /// @notice Set (or clear with address(0)) the agent key. The agent can only propose payments, which every
-    ///         circuit still has to allow, so this is not delayed.
+    ///         circuit still has to allow, so it never has more power than the owner, and this applies at once,
+    ///         except while some custom rule limits the owner but not the agent: an agent would then escape that rule,
+    ///         so naming one is loosening (queue `AGENT`). Clearing always applies at once.
     function setAgent(address newAgent) external onlyController {
-        agent = newAgent;
-        agentSetBy = msg.sender;
-        emit AgentSet(newAgent, msg.sender);
+        _requireNotLoosening(newAgent != address(0) && _ruleLimitsOwnerNotAgent());
+        _setAgent(newAgent, msg.sender);
     }
 
     /// @notice Set the beneficiary, or clear it with address(0). Setting one gives a new party the power to propose
@@ -822,17 +838,21 @@ contract CircuitWillEscrow is ReentrancyGuard {
     /// @notice Attach a custom rule: a circuit with the 256-pin facts layout (`CustomFactsPacking`) and at most
     ///         `MAX_CUSTOM_GATES` gates. `expectedNetlistHash` must equal keccak256 of the circuit's netlist, so the
     ///         circuit the owner previewed is exactly the one attached. `specHash` commits to the canonical rule
-    ///         specification and compiler version it was built from; `text` is the English description shown to the
-    ///         owner, stored in the event for every later viewer. Never delayed: it can only block more.
+    ///         specification and compiler version it was built from; `appliesTo` (`APPLIES_TO_*` bits, non-zero) the
+    ///         roles the rule limits; `text` is the English description shown to the owner, stored in the event for
+    ///         every later viewer. Never delayed: it can only block more. (The one thing it can enable is a named
+    ///         beneficiary, who may act only while some rule limits the beneficiary; naming one is itself delayed.)
     function attachCustomRule(
         address processor,
         uint256 circuitId,
         bytes32 expectedNetlistHash,
         bytes32 specHash,
+        uint8 appliesTo,
         string calldata text
     ) external onlyController returns (uint256 index, uint64 uid) {
         if (customRuleCount >= MAX_CUSTOM_RULES) revert TooManyCustomRules();
         if (specHash == bytes32(0)) revert ZeroHash();
+        if (appliesTo == 0 || appliesTo > 7) revert ValueOutOfRange(appliesTo, 7);
         if (bytes(text).length > MAX_RULE_TEXT_BYTES) revert RuleTextTooLong();
         (uint32 gateCount,, bytes32 netlistHash) = _checkProcessor(processor, circuitId, CustomFactsPacking.N_IN);
         if (gateCount > MAX_CUSTOM_GATES) revert TooManyGates(gateCount, MAX_CUSTOM_GATES);
@@ -842,7 +862,8 @@ contract CircuitWillEscrow is ReentrancyGuard {
         uid = _lastUid;
         customRuleCount += 1;
         customSpecHash[uid] = specHash;
-        emit CustomRuleAttached(uid, netlistHash, specHash, CustomFactsPacking.FACTS_VERSION, text);
+        customAppliesTo[uid] = appliesTo;
+        emit CustomRuleAttached(uid, netlistHash, specHash, CustomFactsPacking.FACTS_VERSION, appliesTo, text);
     }
 
     // ---------------------------------------------------------------- delayed (loosening) changes
@@ -891,7 +912,8 @@ contract CircuitWillEscrow is ReentrancyGuard {
         else if (pc.kind == ChangeKind.UNFREEZE) _setFrozen(false);
         else if (pc.kind == ChangeKind.DETACH_CIRCUIT) _detach(uint64(pc.value));
         else if (pc.kind == ChangeKind.RULE_DELAY) _setRuleDelay(pc.value, false);
-        else _setBeneficiary(pc.target, msg.sender);
+        else if (pc.kind == ChangeKind.BENEFICIARY) _setBeneficiary(pc.target, msg.sender);
+        else _setAgent(pc.target, msg.sender);
         emit ChangeApplied(changeId, msg.sender);
     }
 
@@ -970,6 +992,12 @@ contract CircuitWillEscrow is ReentrancyGuard {
         emit FrozenSet(newFrozen, msg.sender);
     }
 
+    function _setAgent(address newAgent, address by) internal {
+        agent = newAgent;
+        agentSetBy = by;
+        emit AgentSet(newAgent, by);
+    }
+
     function _setBeneficiary(address newBeneficiary, address by) internal {
         beneficiary = newBeneficiary;
         beneficiarySetBy = by;
@@ -1030,6 +1058,7 @@ contract CircuitWillEscrow is ReentrancyGuard {
         if (c.kind == CircuitKind.CUSTOM) {
             customRuleCount -= 1;
             delete customSpecHash[uid];
+            delete customAppliesTo[uid];
         }
         emit CircuitDetached(index, c.kind, c.processor, c.circuitId, uid);
     }
@@ -1049,6 +1078,26 @@ contract CircuitWillEscrow is ReentrancyGuard {
         if (kind == CircuitKind.CONFIRMATION) return ConfirmationPacking.N_IN;
         if (kind == CircuitKind.FREEZE) return FreezePacking.N_IN;
         revert UnsupportedCircuitKind(kind);
+    }
+
+    /// @dev True if some attached custom rule limits every role in `roles`.
+    function _someRuleLimits(uint8 roles) internal view returns (bool) {
+        for (uint256 i; i < _circuits.length; ++i) {
+            AttachedCircuit storage c = _circuits[i];
+            if (c.kind == CircuitKind.CUSTOM && customAppliesTo[c.uid] & roles == roles) return true;
+        }
+        return false;
+    }
+
+    /// @dev True if some attached custom rule limits the owner but not the agent (an agent would escape it).
+    function _ruleLimitsOwnerNotAgent() internal view returns (bool) {
+        for (uint256 i; i < _circuits.length; ++i) {
+            AttachedCircuit storage c = _circuits[i];
+            if (c.kind != CircuitKind.CUSTOM) continue;
+            uint8 a = customAppliesTo[c.uid];
+            if (a & APPLIES_TO_OWNER != 0 && a & APPLIES_TO_AGENT == 0) return true;
+        }
+        return false;
     }
 
     function _hasKind(CircuitKind kind) internal view returns (bool) {

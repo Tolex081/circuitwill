@@ -156,10 +156,11 @@ loosening only.
 | `attachCircuit(...)` | always (one more circuit can only block more) | — |
 | `detachCircuit(...)` | — | always |
 | `setRuleDelay(d)` (new) | `d >= ruleDelay` | `d < ruleDelay` (waits the *old* delay) |
-| `setAgent`, `setEvalGasLimit`, `confirmPayment`, `revokeConfirmation` | unchanged | — |
+| `setAgent(a)` | `a == 0`, or no custom rule limits the owner but not the agent | `a != 0` while some custom rule limits the owner but not the agent (added in the 2026-11-24 security review) |
+| `setEvalGasLimit`, `confirmPayment`, `revokeConfirmation` | unchanged | — |
 
-`setAgent` stays immediate because the agent can only propose payments, and every payment still has to pass the
-circuits. `confirmPayment` stays immediate because it is the owner approving one exact payment, which is already the
+`setAgent` is usually immediate because the agent can only propose payments, and every payment still has to pass the
+circuits. The exception: a custom rule that limits only the owner would not limit a new agent, so naming one then waits. `confirmPayment` stays immediate because it is the owner approving one exact payment, which is already the
 purpose of the Confirmation circuit.
 
 A loosening call to an existing setter reverts with `LooseningIsDelayed()`, so the existing dashboard cannot loosen by

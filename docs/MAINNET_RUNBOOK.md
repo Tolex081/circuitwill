@@ -7,7 +7,9 @@ block (see [Dry run](#dry-run-2026-11-20)); you broadcast each step yourself, fr
 > **Re-measured on 2026-11-24.** On 2026-11-23 the escrow gained custom rules (`attachCustomRule`) and the
 > loosening delay (`queueChange` / `applyChange`, 24 h by default). The dry run was re-run on that contract
 > ([Dry run 2026-11-24](#dry-run-2026-11-24-custom-rules-and-the-delay)) and passed; the cost estimate below uses
-> its figures. The steps themselves are unchanged, except for the larger NAND supply cap in step 1.
+> its figures. The steps themselves are unchanged, except for the larger NAND supply cap in step 1. It was run
+> again the same day after the security review (custom rules now declare who they limit), and the figures below
+> are from that second run.
 
 Rules for every step:
 
@@ -428,26 +430,26 @@ block 76,708,316, the contract with custom rules and the delay). Prices read liv
 | BEM approve transistors | 46,393 |
 | mint 845 NAND | 171,411 |
 | tapeout Daily Cap / Whitelist / Confirmation / Freeze | 1,511,368 + 878,655 + 659,569 + 204,815 = 3,254,407 |
-| Deploy.s.sol (13 transactions) | 7,101,282 |
+| Deploy.s.sol (13 transactions) | 7,204,565 |
 | fund (USDT0 transfer) | 56,112 |
-| 2 × confirmPayment | 2 × 51,877 = 103,754 |
-| proposePayment 60, blocked | 2,259,607 |
-| proposePayment 30, allowed | 2,359,635 |
-| **Total** | **16,085,595** |
+| 2 × confirmPayment | 2 × 51,899 = 103,798 |
+| proposePayment 60, blocked | 2,259,653 |
+| proposePayment 30, allowed | 2,359,656 |
+| **Total** | **16,188,989** |
 
 Arithmetic:
 
 ```
 setup      46,393 + 686,601 + 46,393 + 171,411           =    950,798 gas
 tapeouts   1,511,368 + 878,655 + 659,569 + 204,815       =  3,254,407 gas
-deploy                                                    =  7,101,282 gas
-demo       56,112 + 103,754 + 2,259,607 + 2,359,635       =  4,779,108 gas
-total                                                     = 16,085,595 gas
+deploy                                                    =  7,204,565 gas
+demo       56,112 + 103,798 + 2,259,653 + 2,359,656       =  4,779,219 gas
+total                                                     = 16,188,989 gas
 
-gas cost   16,085,595 gas × 20,000,001 wei                = 321,711,916,085,595 wei ≈ 0.000322 OKB
+gas cost   16,188,989 gas × 20,000,001 wei                = 323,779,796,188,989 wei ≈ 0.000324 OKB
 tapeouts   4 × 0.0013 OKB                                 = 0.0052 OKB
-OKB total  0.000322 + 0.0052                              ≈ 0.0055 OKB
-  at 10× today's gas price (0.2 gwei): 0.00322 + 0.0052   ≈ 0.0084 OKB
+OKB total  0.000324 + 0.0052                              ≈ 0.0055 OKB
+  at 10× today's gas price (0.2 gwei): 0.00324 + 0.0052   ≈ 0.0084 OKB
 
 BEM total  0.1 (createCPU) + 0.01 (one mint call)         = 0.11 BEM  (11,000,000 base units)
 USDT0      60 funded; 30 moves to your own payee, 30 stays in the escrow; none is a fee
@@ -456,7 +458,7 @@ USDT0      60 funded; 30 moves to your own payee, 30 stays in the escrow; none i
 The tapeout fee is 94% of the OKB cost. Keep **at least 0.01 OKB** for the forge simulations' 130% gas margin,
 wallet-side `maxFeePerGas` headroom and a retry. Each later payment with four circuits costs about 2.26M to 2.36M gas,
 ≈ 0.000047 OKB at 0.02 gwei. Each custom rule adds about 0.24M gas per payment (84-NAND rule; see the
-2026-11-24 dry run), and publishing one costs about 0.79M gas + 0.0013 OKB + 0.01 BEM. Fiat prices were not looked up. The optional verification and re-evaluation steps are
+2026-11-24 dry run), and publishing one costs about 0.82M gas + 0.0013 OKB + 0.01 BEM. Fiat prices were not looked up. The optional verification and re-evaluation steps are
 free; DeWEB hosting is not included (see step 10).
 
 ## Dry run (2026-11-24): custom rules and the delay
@@ -478,6 +480,11 @@ step 6 (a custom rule) and step 7 (the delay). **Result: passed** (fork of block
 - **Loosening delay:** `setDailyCap(100)` reverted with `LooseningIsDelayed`. `queueChange(DAILY_CAP, 0, 100)` used
   121,600 gas; `applyChange` before the delay reverted with `ChangeNotReady`; after 24 hours it applied (41,064 gas)
   and the cap read 100 USDT0.
+- **Re-run after the security review (same day, fork of block 76,752,951): passed.** No drift. `Deploy.s.sol`
+  7,204,565 gas (forge estimate 9,497,438); `attachCustomRule` now takes `appliesTo` (7 = everyone here) and used
+  240,458 gas, so publishing the 84-NAND rule totals 815,793 gas. Custom rule: 10 allowed (2,602,524 gas), 1 more
+  blocked by the custom rule alone (2,571,004), both re-evaluated. Delay: refused, queued (121,610), refused before
+  the delay, applied after it (41,100). The cost table above uses this run.
 
 ## Dry run (2026-11-20)
 

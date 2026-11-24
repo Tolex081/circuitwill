@@ -23,6 +23,12 @@ test('isLoosening mirrors CircuitWillEscrow._requireNotLoosening (contracts/test
   assert.equal(isLoosening(CHANGE.RULE_DELAY, 3600n, cur), true);
   assert.equal(isLoosening(CHANGE.DETACH_CIRCUIT, 1n, cur), true);
   assert.equal(isLoosening(CHANGE.BENEFICIARY, 0n, cur), true);
+  // A new AI helper waits only while some custom rule limits the owner but not the helper; removing one never waits.
+  const helper = '0x00000000000000000000000000000000000000a1';
+  assert.equal(isLoosening(CHANGE.AGENT, 0n, { ...cur, target: helper, ownerOnlyRule: true }), true);
+  assert.equal(isLoosening(CHANGE.AGENT, 0n, { ...cur, target: helper, ownerOnlyRule: false }), false);
+  assert.equal(isLoosening(CHANGE.AGENT, 0n, { ...cur, target: '0x0000000000000000000000000000000000000000', ownerOnlyRule: true }), false);
+  assert.equal(isLoosening(CHANGE.AGENT, 0n, { ...cur, target: helper, ownerOnlyRule: true }, { live: false }), false);
 });
 
 test('setup mode (no circuit attached): nothing is delayed', () => {
@@ -36,6 +42,8 @@ test('describeChange speaks plain English', () => {
   assert.match(describeChange({ kind: CHANGE.SAVE_PAYEE, target: '0x1234567890123456789012345678901234567890' }), /^Trust 0x1234…7890$/);
   assert.equal(describeChange({ kind: CHANGE.RULE_DELAY, value: 3600n }), 'Shorten the waiting time for rule changes to 1 hour');
   assert.equal(describeChange({ kind: CHANGE.BENEFICIARY, target: '0x0000000000000000000000000000000000000000' }), 'Remove the beneficiary');
+  assert.equal(describeChange({ kind: CHANGE.AGENT, target: '0x00000000000000000000000000000000000000a1' }), 'Name 0x0000…00a1 as AI helper');
+  assert.equal(describeChange({ kind: CHANGE.AGENT, target: '0x0000000000000000000000000000000000000000' }), 'Remove the AI helper');
 });
 
 test('changeTiming: waiting, ready within 7 days, then expired (ChangeNotReady / ChangeExpired)', () => {

@@ -27,10 +27,16 @@
 //   { fact: 'count_day', max: 5 }                                                     payments today incl. this one
 //   { fact: 'payee_age_hours', min: 48 }
 //   { fact: 'checkin_age_hours', min: 4320 } | { fact: 'checkin_age_hours', max: 720 }
-//   { fact: 'payee_trusted' | 'payee_known' | 'payee_paid_before' | 'confirmed' | 'is_withdrawal', is: true|false }
-//   { fact: 'caller', in: ['owner', 'agent', 'beneficiary'] }
+//   { fact: 'payee_trusted' | 'payee_paid_before' | 'confirmed', is: true }
+//   { fact: 'is_withdrawal', is: true|false }
 //   { fact: 'time', windows: [{ days: [0..6], from: 'HH:MM', to: 'HH:MM' }] }        local time, Monday = 0,
 //                                                                                    from inclusive, to exclusive
+//
+// Every condition only gets easier to pass through something the owner cannot do at once (a delayed change, real
+// spending, time passing). Conditions that an instant owner action could satisfy are refused (security review
+// 2026-11-24): "is: false" on trusted / paid before / approved (removing a recipient or an approval is instant),
+// "payee_known" (adding a recipient is instant; use payee_age_hours min instead), and conditions on who is paying
+// (the people a rule limits are its appliesTo, which the escrow records as the rule's role bits).
 //
 // Known limit: time zones are a fixed offset. Daylight saving is not followed.
 
@@ -73,15 +79,25 @@ const MENU = Object.freeze({
   count_day: { field: 'count_day_after', ops: ['max'] },
   payee_age_hours: { field: 'payee_age_hours', ops: ['min'] },
   checkin_age_hours: { field: 'checkin_age_hours', ops: ['min', 'max'] },
-  payee_trusted: { field: 'payee_trusted', bool: true },
-  payee_known: { field: 'payee_known', bool: true },
-  payee_paid_before: { field: 'payee_paid_before', bool: true },
-  confirmed: { field: 'confirmed', bool: true },
+  payee_trusted: { field: 'payee_trusted', bool: true, onlyTrue: true },
+  payee_paid_before: { field: 'payee_paid_before', bool: true, onlyTrue: true },
+  confirmed: { field: 'confirmed', bool: true, onlyTrue: true },
   is_withdrawal: { field: 'is_withdrawal', bool: true },
-  caller: { field: 'caller_role', roles: true },
   time: { field: 'slot_of_week_utc', time: true },
 });
 export const MENU_FACTS = Object.freeze(Object.keys(MENU));
+
+/// Why a fact the escrow packs is not on the menu.
+const OFF_MENU = Object.freeze({
+  payee_known: 'adding a recipient takes effect at once, so "on my list" could be switched on instantly; use "recipient added at least N hours ago" (payee_age_hours min) instead',
+  caller: 'who a rule limits is chosen with appliesTo, not inside the rule',
+});
+
+/// The escrow's role bits for a rule's appliesTo (CircuitWillEscrow APPLIES_TO_*): owner 1, agent 2, beneficiary 4.
+export const ROLE_BITS = Object.freeze({ owner: 1, agent: 2, beneficiary: 4 });
+export function appliesToBits(rule) {
+  return validateRule(rule).appliesTo.reduce((m, r) => m | ROLE_BITS[r], 0);
+}
 
 export const LIMITS = Object.freeze({ maxGroups: 4, maxConditions: 12, maxWindows: 8, maxGates: 1000 });
 
@@ -181,17 +197,15 @@ export function validateRule(rule) {
 function validateCondition(c, path) {
   if (!isPlainObject(c)) throw new RuleError('condition must be an object', path);
   const m = MENU[c.fact];
+  if (!m && OFF_MENU[c.fact]) throw new RuleError(`"${c.fact}" can't be used: ${OFF_MENU[c.fact]}`, path);
   if (!m) throw new RuleError(`"${c.fact}" is not on the menu of facts the escrow can check`, path);
   if (m.bool) {
     onlyKeys(c, ['fact', 'is'], path);
     if (typeof c.is !== 'boolean') throw new RuleError('"is" must be true or false', path);
+    if (m.onlyTrue && !c.is) {
+      throw new RuleError(`"${c.fact}" can only be required to be true: you can switch it off at once (for example by removing a recipient), which would loosen the rule without the wait`, path);
+    }
     return { fact: c.fact, is: c.is };
-  }
-  if (m.roles) {
-    onlyKeys(c, ['fact', 'in'], path);
-    if (!Array.isArray(c.in) || c.in.length === 0) throw new RuleError('list at least one person', path);
-    for (const r of c.in) if (!(r in ROLES)) throw new RuleError(`unknown person "${r}"`, path);
-    return { fact: 'caller', in: [...new Set(c.in)].sort((a, b) => ROLES[a] - ROLES[b]) };
   }
   if (m.time) {
     onlyKeys(c, ['fact', 'windows'], path);
@@ -244,7 +258,6 @@ export function canonicalJson(rule) {
   const r = validateRule(rule);
   const cond = (c) => {
     if ('is' in c) return `{"fact":${JSON.stringify(c.fact)},"is":${c.is}}`;
-    if ('in' in c) return `{"fact":"caller","in":${JSON.stringify(c.in)}}`;
     if ('windows' in c) {
       const ws = c.windows.map((w) => `{"days":${JSON.stringify(w.days)},"from":"${w.from}","to":"${w.to}"}`);
       return `{"fact":"time","windows":[${ws.join(',')}]}`;
@@ -345,7 +358,6 @@ export function evaluateRule(rule, facts) {
 function evalCondition(c, facts, tz) {
   const m = MENU[c.fact];
   if (m.bool) return (num(facts[m.field]) === 1n) === c.is;
-  if (m.roles) return c.in.some((p) => BigInt(ROLES[p]) === num(facts.caller_role));
   if (m.time) return windowSlots(c.windows, tz)[Number(num(facts.slot_of_week_utc))] === 1;
   const k = m.money ? parseCents(c.max ?? c.min) : BigInt(c.max ?? c.min);
   const v = num(facts[m.field]);
@@ -448,7 +460,6 @@ function buildCondition(b, c, tz) {
     return c.is ? x : b.not(x);
   }
   const bits = b.field(m.field);
-  if (m.roles) return roleIn(b, c.in);
   if (m.time) {
     // The slot is never above 671 (the escrow refuses to pack anything larger), so an interval reaching the end of
     // the week needs no upper check, and a window covering the whole week is always true.

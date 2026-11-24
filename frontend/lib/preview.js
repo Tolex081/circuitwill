@@ -166,7 +166,10 @@ export function simulate({ circuits, netlists, ctx, balance }) {
   });
   const unknown = results.some((r) => r.status == null);
   let reason = unknown ? null : reasonFromStatuses(results.map((r) => r.status));
-  if (reason === REASON.NONE && ctx.isBeneficiary && !circuits.some((c) => Number(c.kind) === KIND.CUSTOM)) reason = REASON.NO_CUSTOM_RULE;
+  // A beneficiary may spend only while some custom rule limits the beneficiary (appliesTo bit 4).
+  if (reason === REASON.NONE && ctx.isBeneficiary && !circuits.some((c) => Number(c.kind) === KIND.CUSTOM && (Number(c.appliesTo ?? 0) & 4))) {
+    reason = REASON.NO_CUSTOM_RULE;
+  }
   if (reason === REASON.NONE && big(balance) < ctx.amount) reason = REASON.INSUFFICIENT_BALANCE;
   const allowed = reason == null ? null : reason === REASON.NONE;
   const spentAfter = allowed ? ctx.spentBefore + ctx.amount : ctx.spentBefore;
@@ -287,7 +290,7 @@ function blockerPhrase(r, ctx, role) {
 /// the Approval rule is the only thing in the way (so the page can offer its approve action).
 export function verdictFor(sim, ctx, { role = 'owner', ruleName = (k) => `Rule ${k}`, decode = () => null } = {}) {
   if (sim.allowed == null) return { tone: 'unknown', text: 'Can’t preview this payment right now: a circuit couldn’t be read. You can still send it; the blockchain decides.', approveOnly: false };
-  if (sim.reason === REASON.NO_CUSTOM_RULE) return { tone: 'block', text: 'This payment would be blocked: a beneficiary can only spend under a custom rule, and none is turned on.', approveOnly: false };
+  if (sim.reason === REASON.NO_CUSTOM_RULE) return { tone: 'block', text: 'This payment would be blocked: a beneficiary can only spend under a custom rule that limits the beneficiary, and none is turned on.', approveOnly: false };
   if (sim.reason === REASON.NO_CIRCUITS) return { tone: 'block', text: 'This payment would be blocked: no rules are turned on, so nothing can be paid.', approveOnly: false };
   if (sim.allowed) return { tone: 'allow', text: 'This payment would go through: every rule says yes.', approveOnly: false };
   if (sim.reason === REASON.INSUFFICIENT_BALANCE) {

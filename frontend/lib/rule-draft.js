@@ -178,8 +178,8 @@ const CONDITION = {
     { type: 'object', additionalProperties: false, required: ['fact', 'min'], properties: { fact: { type: 'string', enum: ['balance_after'] }, min: MONEY } },
     { type: 'object', additionalProperties: false, required: ['fact', 'max'], properties: { fact: { type: 'string', enum: ['count_day', 'checkin_age_hours'] }, max: { type: 'integer' } } },
     { type: 'object', additionalProperties: false, required: ['fact', 'min'], properties: { fact: { type: 'string', enum: ['payee_age_hours', 'checkin_age_hours'] }, min: { type: 'integer' } } },
-    { type: 'object', additionalProperties: false, required: ['fact', 'is'], properties: { fact: { type: 'string', enum: ['payee_trusted', 'payee_known', 'payee_paid_before', 'confirmed', 'is_withdrawal'] }, is: { type: 'boolean' } } },
-    { type: 'object', additionalProperties: false, required: ['fact', 'in'], properties: { fact: { type: 'string', enum: ['caller'] }, in: { type: 'array', items: { type: 'string', enum: ['owner', 'agent', 'beneficiary'] } } } },
+    { type: 'object', additionalProperties: false, required: ['fact', 'is'], properties: { fact: { type: 'string', enum: ['payee_trusted', 'payee_paid_before', 'confirmed'] }, is: { type: 'boolean', enum: [true] } } },
+    { type: 'object', additionalProperties: false, required: ['fact', 'is'], properties: { fact: { type: 'string', enum: ['is_withdrawal'] }, is: { type: 'boolean' } } },
     {
       type: 'object', additionalProperties: false, required: ['fact', 'windows'],
       properties: {
@@ -225,8 +225,8 @@ The only facts the circuit can check (use nothing else):
 - count_day: "max", number of payments today incl. this one.
 - payee_age_hours: "min", hours since the recipient was added to the owner's list.
 - checkin_age_hours: "min" (owner has NOT checked in for at least N hours) or "max" (owner checked in within N hours).
-- payee_trusted, payee_known (on the list), payee_paid_before, confirmed (owner approved this exact payment), is_withdrawal: "is" true/false.
-- caller: "in" a list of roles.
+- payee_trusted, payee_paid_before, confirmed (owner approved this exact payment): "is" true only (the owner can change these at once, so a rule may only require them).
+- is_withdrawal: "is" true/false.
 - time: "windows" of {days (0 = Monday ... 6 = Sunday), from "HH:MM", to "HH:MM"} in the owner's local time, 15-minute steps, "to" may be "24:00", no window may cross midnight (split it in two). "tz" is the owner's UTC offset in minutes; use 0 unless the sentence says where they are.
 
 Rules for you:

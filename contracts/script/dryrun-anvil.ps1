@@ -322,7 +322,7 @@ try {
     $specText = Get-Content "../circuits/custom/build/$rule.spec.txt" -Raw
     $specHex = "0x" + (([System.Text.Encoding]::UTF8.GetBytes($specText) | ForEach-Object { $_.ToString("x2") }) -join "")
     $specHash = ("" + (Invoke-Cast keccak $specHex)).Trim()
-    Send-Tx "attachCustomRule ($rule)" $controller $escrow "attachCustomRule(address,uint256,bytes32,bytes32,string)" $circuits $customId $netlistHash $specHash "Everyone: day <=10 USDT0" | Out-Null
+    Send-Tx "attachCustomRule ($rule)" $controller $escrow "attachCustomRule(address,uint256,bytes32,bytes32,uint8,string)" $circuits $customId $netlistHash $specHash 7 "Everyone: day <=10 USDT0" | Out-Null
     Assert-Equal (Read-Uint $escrow "circuitCount()(uint256)") 5 "five circuits attached (four official + one custom)"
     Assert-Equal (Read-Uint $escrow "customRuleCount()(uint256)") 1 "one custom rule"
     $report.demo.customRule = [ordered]@{ slug = $rule; circuitId = $customId; gates = $ruleGates; netlistHash = $netlistHash; specHash = $specHash }

@@ -10,7 +10,7 @@
 // Also here: the list of attached custom rules, the check-in button and the beneficiary. DOM code; the logic it relies
 // on is pure and tested (lib/rule-compiler.js, lib/rule-english.js, lib/rule-draft.js, lib/rule-suggest.js).
 
-import { compileRule, specPreimage, packFacts, RuleError, DAY_NAMES, formatTz, N_IN } from './lib/rule-compiler.js';
+import { compileRule, specPreimage, packFacts, RuleError, DAY_NAMES, formatTz, N_IN, appliesToBits } from './lib/rule-compiler.js';
 import { describeRule, shortRuleText, boundaryExamples, MAX_RULE_TEXT_BYTES } from './lib/rule-english.js';
 import { draftLocally, draftWithClaude } from './lib/rule-draft.js';
 import { suggestRules } from './lib/rule-suggest.js';
@@ -311,7 +311,7 @@ export function mountRuleBuilder(d) {
     // 3. Check the published bytes are exactly the circuit shown here, then attach.
     const onChain = await circuits.netlist(id);
     if (ethers.keccak256(onChain) !== hash) throw new Error(`Circuit #${id} is not this rule's circuit (its fingerprint differs).`);
-    await run('Turn on the custom rule', () => d.sendTx('Turn on your custom rule', d.escrowRead(), 'attachCustomRule', [processor, id, hash, specHash, text]));
+    await run('Turn on the custom rule', () => d.sendTx('Turn on your custom rule', d.escrowRead(), 'attachCustomRule', [processor, id, hash, specHash, appliesToBits(rule), text]));
     d.toast('Your custom rule is on. It applies from the next payment.', { ok: true });
     closeBuilder();
     await d.refresh();

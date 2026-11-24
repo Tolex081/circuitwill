@@ -14,7 +14,7 @@ import {LittleEndian} from "./LittleEndian.sol";
 ///        bits 168..177  slot_of_week_utc     15-minute slot since Monday 00:00 UTC, 0..671
 ///        bit  178       payee_trusted        recipient is a saved payee
 ///        bit  179       payee_known          recipient has a payee entry
-///        bit  180       payee_paid_before    recipient has received an allowed transfer while its entry existed
+///        bit  180       payee_paid_before    recipient has received an allowed transfer since its entry was last removed (removePayee clears it)
 ///        bits 181..196  payee_age_hours      hours since the recipient was added, saturating at 65535
 ///        bits 197..212  checkin_age_hours    hours since the controller's last check-in, saturating at 65535
 ///        bits 213..214  caller_role          0 controller, 1 agent, 2 beneficiary

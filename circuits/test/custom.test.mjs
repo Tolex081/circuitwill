@@ -179,14 +179,14 @@ test('the compiler refuses anything off the menu, unsafe or meaningless', () => 
   assert.throws(bad([{ allOf: [{ fact: 'time', windows: [{ days: [0], from: '21:00', to: '09:00' }] }] }]), /after the start/);
   assert.throws(bad([{ allOf: [{ fact: 'time', windows: [{ days: [0], from: '09:10', to: '10:00' }] }] }]), /15 minutes/);
   assert.throws(bad([{ allOf: [{ fact: 'time', windows: [{ days: [0, 1, 2, 3, 4, 5, 6], from: '00:00', to: '24:00' }] }] }]), /never blocks/);
-  assert.throws(bad([{ allOf: [{ fact: 'caller', in: ['owner', 'agent', 'beneficiary'] }] }], { appliesTo: ['agent'] }), /never blocks/);
+  assert.throws(bad([{ allOf: [{ fact: 'caller', in: ['agent'] }] }]), /appliesTo/);
   assert.throws(bad([{ allOf: [{ fact: 'spent_day', max: '10' }] }], { tz: 7 }), /time zone/);
   assert.throws(bad([{ allOf: [{ fact: 'spent_day', max: '10', extra: 1 }] }]), /unknown field/);
   assert.throws(() => compileRule({ ...base, v: 2, anyOf: [] }), /version/);
   assert.throws(() => validateRule({ ...base, appliesTo: [], anyOf: [{ allOf: [{ fact: 'confirmed', is: true }] }] }), /whose payments/);
   const many = Array.from({ length: LIMITS.maxConditions + 1 }, () => ({ fact: 'confirmed', is: true }));
   assert.throws(bad([{ allOf: many }]), /at most/);
-  assert.throws(bad([{ allOf: [{ fact: 'payee_trusted', is: true }, { fact: 'payee_trusted', is: false }] }]), /blocks every payment by the people it limits/);
+  assert.throws(bad([{ allOf: [{ fact: 'payee_trusted', is: false }] }]), /can only be required to be true/);
   try {
     bad([{ allOf: [{ fact: 'merchant' }] }])();
   } catch (e) {
@@ -215,9 +215,9 @@ test('a deliberately large rule stays under the gate cap and still agrees with t
     tz: 330,
     appliesTo: ['agent', 'beneficiary'],
     anyOf: [
-      { allOf: [{ fact: 'spent_day', max: '100' }, { fact: 'time', windows: [{ days: [0, 1, 2, 3, 4], from: '09:00', to: '18:00' }] }, { fact: 'payee_known', is: true }] },
+      { allOf: [{ fact: 'spent_day', max: '100' }, { fact: 'time', windows: [{ days: [0, 1, 2, 3, 4], from: '09:00', to: '18:00' }] }, { fact: 'payee_age_hours', min: 1 }] },
       { allOf: [{ fact: 'spent_7d', max: '300' }, { fact: 'payee_age_hours', min: 72 }, { fact: 'confirmed', is: true }] },
-      { allOf: [{ fact: 'balance_after', min: '1000' }, { fact: 'count_day', max: 3 }, { fact: 'caller', in: ['agent'] }] },
+      { allOf: [{ fact: 'balance_after', min: '1000' }, { fact: 'count_day', max: 3 }] },
       { allOf: [{ fact: 'spent_month', max: '2000' }, { fact: 'is_withdrawal', is: false }, { fact: 'payee_paid_before', is: true }] },
     ],
   };

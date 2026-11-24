@@ -46,6 +46,7 @@ contract CustomRuleTest is Base {
     uint256 internal agent50Id;
     uint256 internal weekId;
     uint256 internal inheritId;
+    uint256 internal ownerOnlyId;
     address internal daughter = makeAddr("daughter");
 
     uint8 internal constant K_CUSTOM = uint8(CircuitWillEscrow.CircuitKind.CUSTOM);
@@ -57,6 +58,7 @@ contract CustomRuleTest is Base {
         agent50Id = processor.tapeout(customNetlist("agent-50-5-trusted"), 256, 1);
         weekId = processor.tapeout(customNetlist("week-200-48h"), 256, 1);
         inheritId = processor.tapeout(customNetlist("inheritance"), 256, 1);
+        ownerOnlyId = processor.tapeout(customNetlist("owner-10"), 256, 1);
     }
 
     // ================================================================ helpers
@@ -73,8 +75,22 @@ contract CustomRuleTest is Base {
     function attach(string memory slug, uint256 id) internal returns (uint64 uid) {
         vm.prank(owner);
         (, uid) = escrow.attachCustomRule(
-            address(processor), id, keccak256(customNetlist(slug)), specHash(slug), string.concat("rule ", slug)
+            address(processor),
+            id,
+            keccak256(customNetlist(slug)),
+            specHash(slug),
+            appliesTo(slug),
+            string.concat("rule ", slug)
         );
+    }
+
+    /// @dev The roles each example rule limits (circuits/custom/examples.mjs appliesTo): 1 owner, 2 agent, 4 beneficiary.
+    function appliesTo(string memory slug) internal pure returns (uint8) {
+        bytes32 h = keccak256(bytes(slug));
+        if (h == keccak256("son") || h == keccak256("agent-50-5-trusted")) return 2;
+        if (h == keccak256("inheritance")) return 4;
+        if (h == keccak256("owner-10")) return 1;
+        return 7; // daily-10, week-200-48h
     }
 
     function propose(address from, address to, uint256 amount) internal returns (bool allowed) {
@@ -113,6 +129,7 @@ contract CustomRuleTest is Base {
 
         assertEq(escrow.customRuleCount(), 1);
         assertEq(escrow.customSpecHash(uid), specHash("son"));
+        assertEq(escrow.customAppliesTo(uid), 2);
         CircuitWillEscrow.AttachedCircuit memory c = escrow.circuitAt(1);
         assertEq(uint8(c.kind), K_CUSTOM);
         assertEq(c.netlistHash, nh);
@@ -125,10 +142,12 @@ contract CustomRuleTest is Base {
             if (logs[i].topics[0] != CircuitWillEscrow.CustomRuleAttached.selector) continue;
             seen = true;
             assertEq(uint64(uint256(logs[i].topics[1])), uid);
-            (bytes32 h, bytes32 s, uint32 v, string memory text) = abi.decode(logs[i].data, (bytes32, bytes32, uint32, string));
+            (bytes32 h, bytes32 s, uint32 v, uint8 a, string memory text) =
+                abi.decode(logs[i].data, (bytes32, bytes32, uint32, uint8, string));
             assertEq(h, nh);
             assertEq(s, specHash("son"));
             assertEq(v, 1);
+            assertEq(a, 2, "the son rule limits the AI helper only");
             assertEq(text, "rule son");
         }
         assertTrue(seen, "CustomRuleAttached emitted");
@@ -142,14 +161,19 @@ contract CustomRuleTest is Base {
         vm.expectRevert(
             abi.encodeWithSelector(CircuitWillEscrow.NetlistHashMismatch.selector, nh, keccak256(customNetlist("daily-10")))
         );
-        escrow.attachCustomRule(address(processor), daily10Id, nh, sh, "");
+        escrow.attachCustomRule(address(processor), daily10Id, nh, sh, 2, "");
         // Official circuits do not have the facts pinout.
         vm.expectRevert(abi.encodeWithSelector(CircuitWillEscrow.PinoutMismatch.selector, 96, 1, 0));
-        escrow.attachCustomRule(address(processor), dailyCapId, nh, sh, "");
+        escrow.attachCustomRule(address(processor), dailyCapId, nh, sh, 2, "");
         vm.expectRevert(CircuitWillEscrow.ZeroHash.selector);
-        escrow.attachCustomRule(address(processor), sonId, nh, bytes32(0), "");
+        escrow.attachCustomRule(address(processor), sonId, nh, bytes32(0), 2, "");
+        // It must say which roles it limits (owner 1, agent 2, beneficiary 4).
+        vm.expectRevert(abi.encodeWithSelector(CircuitWillEscrow.ValueOutOfRange.selector, 0, 7));
+        escrow.attachCustomRule(address(processor), sonId, nh, sh, 0, "");
+        vm.expectRevert(abi.encodeWithSelector(CircuitWillEscrow.ValueOutOfRange.selector, 8, 7));
+        escrow.attachCustomRule(address(processor), sonId, nh, sh, 8, "");
         vm.expectRevert(CircuitWillEscrow.RuleTextTooLong.selector);
-        escrow.attachCustomRule(address(processor), sonId, nh, sh, string(new bytes(281)));
+        escrow.attachCustomRule(address(processor), sonId, nh, sh, 2, string(new bytes(281)));
         vm.expectRevert(
             abi.encodeWithSelector(CircuitWillEscrow.UnsupportedCircuitKind.selector, CircuitWillEscrow.CircuitKind.CUSTOM)
         );
@@ -168,12 +192,12 @@ contract CustomRuleTest is Base {
         uint256 bigId = processor.tapeout(big, 256, 1);
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(CircuitWillEscrow.TooManyGates.selector, 1001, 1000));
-        escrow.attachCustomRule(address(processor), bigId, keccak256(big), sh, "");
+        escrow.attachCustomRule(address(processor), bigId, keccak256(big), sh, 2, "");
 
         // Only the controller.
         vm.prank(agentKey);
         vm.expectRevert(CircuitWillEscrow.NotController.selector);
-        escrow.attachCustomRule(address(processor), sonId, nh, sh, "");
+        escrow.attachCustomRule(address(processor), sonId, nh, sh, 2, "");
     }
 
     function test_attachCustomRule_atMostThree() public {
@@ -182,7 +206,7 @@ contract CustomRuleTest is Base {
         attach("agent-50-5-trusted", agent50Id);
         vm.prank(owner);
         vm.expectRevert(CircuitWillEscrow.TooManyCustomRules.selector);
-        escrow.attachCustomRule(address(processor), weekId, keccak256(customNetlist("week-200-48h")), specHash("week-200-48h"), "");
+        escrow.attachCustomRule(address(processor), weekId, keccak256(customNetlist("week-200-48h")), specHash("week-200-48h"), 7, "");
     }
 
     // ================================================================ facts
@@ -329,6 +353,54 @@ contract CustomRuleTest is Base {
         escrow.proposePayment(daughter, 1, "");
     }
 
+    /// @dev Security review 2026-11-24: a custom rule that does not limit the beneficiary (here the son rule, which
+    ///      limits only the AI helper) must not hand a named beneficiary the owner's spending power.
+    function test_beneficiary_needsARuleThatLimitsTheBeneficiary() public {
+        loosenNow(CircuitWillEscrow.ChangeKind.BENEFICIARY, daughter, 0);
+        attach("son", sonId);
+        vm.warp(lagos(0, 10, 0) + 7 days); // next Monday 10:00 in Lagos: the son rule itself would let her through
+        vm.recordLogs();
+        assertFalse(propose(daughter, daughter, 40 * USDT), "the son rule says nothing about the beneficiary");
+        assertEq(decisionLogs(vm.getRecordedLogs())[0].reason, reason(CircuitWillEscrow.Reason.NO_CUSTOM_RULE));
+
+        // A rule that does limit the beneficiary is what lets her act, within that rule.
+        attach("inheritance", inheritId);
+        assertFalse(propose(daughter, daughter, 40 * USDT), "inheritance rule: owner checked in recently");
+        vm.warp(lagos(0, 10, 0) + 7 days + 182 days);
+        assertTrue(propose(daughter, daughter, 40 * USDT), "inheritance rule unlocked after 180 days");
+    }
+
+    /// @dev Security review 2026-11-24: naming an AI helper that a custom rule does not limit, while that rule limits
+    ///      the owner, would let a stolen key escape the owner's own limit at once. It waits like any loosening.
+    function test_setAgent_isDelayedWhileARuleLimitsTheOwnerButNotTheAgent() public {
+        attach("owner-10", ownerOnlyId);
+        address thiefAgent = makeAddr("thiefAgent");
+        assertTrue(propose(owner, payee, 10 * USDT));
+        assertFalse(propose(owner, payee, 1 * USDT), "the owner is held to 10 a day");
+
+        vm.prank(owner);
+        vm.expectRevert(CircuitWillEscrow.LooseningIsDelayed.selector);
+        escrow.setAgent(thiefAgent);
+        // Clearing the AI helper still applies at once.
+        vm.prank(owner);
+        escrow.setAgent(address(0));
+        assertFalse(escrow.isActiveAgent(agentKey));
+
+        // Through the queue it works after the delay, so the owner has a day to notice and cancel.
+        loosenNow(CircuitWillEscrow.ChangeKind.AGENT, thiefAgent, 0);
+        assertTrue(escrow.isActiveAgent(thiefAgent));
+    }
+
+    /// @dev With only rules that also limit the AI helper, replacing the helper gives no one more power than the owner
+    ///      already has, so it still applies at once.
+    function test_setAgent_staysImmediateWhenEveryRuleLimitsTheAgent() public {
+        attach("daily-10", daily10Id);
+        address newAgent = makeAddr("newAgent");
+        vm.prank(owner);
+        escrow.setAgent(newAgent);
+        assertTrue(escrow.isActiveAgent(newAgent));
+    }
+
     function test_inheritance_unlocksAfter180DaysWithoutCheckIn() public {
         loosenNow(CircuitWillEscrow.ChangeKind.BENEFICIARY, daughter, 0);
         attach("inheritance", inheritId);
@@ -372,7 +444,7 @@ contract CustomRuleTest is Base {
         factory.register(address(tp));
         bytes memory nl = customNetlist("daily-10");
         vm.prank(owner);
-        (, uint64 uid) = escrow.attachCustomRule(address(tp), daily10Id, keccak256(nl), specHash("daily-10"), "");
+        (, uint64 uid) = escrow.attachCustomRule(address(tp), daily10Id, keccak256(nl), specHash("daily-10"), 7, "");
 
         assertTrue(escrow.checkCircuit(uid), "unchanged: nothing happens");
         assertFalse(escrow.circuitAt(1).tampered);

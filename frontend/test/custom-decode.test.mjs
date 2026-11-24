@@ -39,4 +39,9 @@ test('the preview evaluates a custom rule on the facts the escrow reports', () =
   // With nothing attached at all, a beneficiary is blocked like everyone else (NO_CIRCUITS comes first, as on chain).
   const sim = simulate({ circuits: [], netlists: [], ctx: { ...ctx, isBeneficiary: true }, balance: 100_000_000n });
   assert.equal(sim.reason, REASON.NO_CIRCUITS);
+  // A custom rule that does not limit the beneficiary does not unlock the beneficiary (appliesTo bit 4).
+  const agentOnly = [{ kind: KIND.CUSTOM, netlistHash: null, appliesTo: 2 }];
+  assert.equal(simulate({ circuits: agentOnly, netlists, ctx: { ...ctx, isBeneficiary: true }, balance: 100_000_000n }).reason, REASON.NO_CUSTOM_RULE);
+  const forHeir = [{ kind: KIND.CUSTOM, netlistHash: null, appliesTo: 4 }];
+  assert.equal(simulate({ circuits: forHeir, netlists, ctx: { ...ctx, isBeneficiary: true }, balance: 100_000_000n }).reason, REASON.NONE);
 });

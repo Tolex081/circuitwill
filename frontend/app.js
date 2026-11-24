@@ -13,7 +13,7 @@
 import { ethers } from './vendor/ethers-6.13.4.min.js';
 import { isMemoryEnabled, setMemoryEnabled } from './lib/memory-pref.js';
 import { ESCROW_ABI, ESCROW_BYTECODE, KEY_ABI, KEY_BYTECODE } from './artifacts.js';
-import { KIND, KIND_LABEL, STATUS, STATUS_NAME, REASON, REASON_NAME, REASON_TEXT, ACTION_NAME, CHANGE } from './lib/meta.js';
+import { KIND, KIND_LABEL, STATUS, STATUS_NAME, REASON, REASON_NAME, REASON_TEXT, ACTION_NAME, CHANGE, APPLIES_TO } from './lib/meta.js';
 import { isLoosening, describeChange, changeTiming, queueNotice, durationText } from './lib/changes.js';
 import { mountRuleBuilder } from './rule-builder.js';
 import {
@@ -951,7 +951,12 @@ async function loadCustomRules(e, list) {
   const customs = list.filter((c) => c.kind === KIND.CUSTOM);
   if (!customs.length) return {};
   const out = {};
-  await Promise.all(customs.map(async (c) => (out[String(c.uid)] = { specHash: await e.customSpecHash(c.uid), text: null })));
+  await Promise.all(
+    customs.map(async (c) => {
+      const [specHash, appliesTo] = await Promise.all([e.customSpecHash(c.uid), e.customAppliesTo(c.uid)]);
+      out[String(c.uid)] = { specHash, appliesTo: Number(appliesTo), text: null };
+    }),
+  );
   try {
     const { from, latest } = await scanRange();
     const logs = await getLogsChunked({ address: state.escrowAddr, topics: [escrowInterface.getEvent('CustomRuleAttached').topicHash] }, from, latest);
@@ -969,6 +974,7 @@ async function loadCustomRules(e, list) {
 /// The current values the loosening check compares against.
 const currentValues = (i = state.info) => ({
   dailyCap: i.dailyCap, trialLimit: i.trialLimit, coolingOffHours: i.coolingOffHours, confirmationThreshold: i.confirmationThreshold, frozen: i.frozen, ruleDelay: i.ruleDelay,
+  ownerOnlyRule: Object.values(i.customRules ?? {}).some((r) => (r.appliesTo & APPLIES_TO.OWNER) && !(r.appliesTo & APPLIES_TO.AGENT)),
 });
 
 /// Plain name of the attached circuit with this uid.
@@ -1739,7 +1745,12 @@ async function runPreview() {
         nextBlockTime(), e.circuits(), e.spentToday(), e.lastResetDay(), e.dailyCap(), e.payees(form.to), e.trialLimit(), e.coolingOffHours(),
         e.confirmationThreshold(), e.controller(), e.frozen(), e.balance(), e.currentPaymentHash(form.to, form.amount),
       ]);
-    const list = circuits.map((c) => ({ kind: Number(c.kind), processor: c.processor, circuitId: c.circuitId, netlistHash: c.netlistHash }));
+    const list = await Promise.all(
+      circuits.map(async (c) => ({
+        kind: Number(c.kind), processor: c.processor, circuitId: c.circuitId, netlistHash: c.netlistHash,
+        appliesTo: Number(c.kind) === KIND.CUSTOM ? Number(await e.customAppliesTo(c.uid)) : 0,
+      })),
+    );
     const hasCustom = list.some((c) => c.kind === KIND.CUSTOM);
     const [confirmation, netlists, custom] = await Promise.all([
       e.confirmations(hash),
@@ -1975,7 +1986,8 @@ async function saveRule(rule) {
     case 'agent': {
       const t = v('r-agent').trim();
       const x = t ? parseAddress(t, "AI helper's address") : ethers.ZeroAddress;
-      await sendTx(t ? `Set AI helper ${short(x)}` : 'Remove AI helper', e, 'setAgent', [x]);
+      // Naming a helper waits while a custom rule limits the owner but not the helper (it would escape that rule).
+      await applyOrQueue(CHANGE.AGENT, { target: x, label: t ? `Set AI helper ${short(x)}` : 'Remove AI helper', direct: ['setAgent', [x]], cur: { target: x } });
       break;
     }
     case 'evalGasLimit': {
