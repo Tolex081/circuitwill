@@ -691,9 +691,13 @@ Decisions #1 and #2 match the Phase 3 record (same circuits, outcomes, balances 
   check-ins. A clause such as "only for groceries" cannot be enforced, and the dashboard says so instead of dropping
   it. Spending totals are escrow-wide (the owner's payments count too). Times are in a fixed UTC offset, with no
   daylight saving.
-- **Custom rules not yet published on a real chain.** The builder's publish path (mint NAND, tape out, verify the
-  netlist hash, attach) is covered by contract tests and the compiler tests, but has not been clicked through against
-  a running anvil fork. The Claude drafter has only been tested with a fake `fetch`, never with a live API key.
+- **Custom rules only published on a local fork.** On 2026-11-24 a will was created in the dashboard on a local
+  anvil fork of X Layer (block 76,708,363), and the "son" rule (172 NAND) was drafted offline, published and turned
+  on from the builder: BEM allowance 46,393 gas, mint 100,199, tapeout 708,882, `attachCustomRule` 222,681. As the AI
+  helper, 6 USDT0 was allowed (2,874,714 gas with five circuits) and 5 more was blocked by the custom rule alone
+  (11 > 10), which **Verify this decision** confirmed. Turning the rule off went to **Waiting changes** for 1 day.
+  Nothing was published on X Layer itself. The Claude drafter has only been tested with a fake `fetch`, never with a
+  live API key.
 - **Unknown payees.** A payee that was never added has age 0. With `coolingOffHours == 0` it can receive up to the
   trial limit.
 - **One open confirmation per recipient.** Consuming a confirmation bumps that recipient's nonce, which invalidates any

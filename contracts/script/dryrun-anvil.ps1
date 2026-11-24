@@ -9,6 +9,9 @@
 #   4. demo: fund 60 USDT0 with a plain transfer, confirm + propose 60 (blocked by Daily Cap 50),
 #      confirm + propose 30 (allowed), then re-evaluate both with frontend/scripts/reevaluate.mjs
 #   5. an extra mint of 1 NAND, to see whether the BEM mint fee is per call or per transistor
+#   6. a custom rule (circuits/custom/build/daily-10): mint, tape out, attachCustomRule; on the next UTC day 10 is
+#      allowed and 1 more is blocked by the custom rule alone; both re-evaluated
+#   7. the loosening delay: raising the daily cap is refused, then queued, applied after ruleDelay
 # It prints the gas of every step and writes a JSON report (broadcast-dryrun/dryrun-report.json).
 #
 # Start anvil first, in another terminal, WITHOUT a block pin (the point is to test today's mainnet state):
@@ -294,6 +297,74 @@ try {
     Send-Tx "mint 1 NAND (probe)" $controller $transistors "mint(uint256,uint256)" 0 1 | Out-Null
     $report.fees.mintOneBem = [string]($bem2 - (Get-Bal $Bem $controller))
     Write-Host "  mint 845 pulled $($report.fees.mintBem), mint 1 pulled $($report.fees.mintOneBem) BEM base units"
+
+    # --- 6. a custom rule ("Up to 10 a day", circuits/custom/build/daily-10), published like the dashboard does:
+    #        mint its NAND, tape it out, check the netlist hash, attachCustomRule. Then the next UTC day: 10 allowed,
+    #        1 more blocked by the custom rule alone.
+    Write-Host "6. custom rule"
+    $rule = "daily-10"
+    $nlHex = (Get-Content "../circuits/custom/build/$rule.netlist.hex" -Raw).Trim()
+    $ruleGates = ($nlHex.Length - 2) / 14
+    Send-Tx "BEM approve transistors (custom rule)" $controller $Bem "approve(address,uint256)" $transistors $live.protocolFee | Out-Null
+    Send-Tx "mint $ruleGates NAND (custom rule)" $controller $transistors "mint(uint256,uint256)" 0 $ruleGates | Out-Null
+    Remove-Item Env:CIRCUIT -ErrorAction SilentlyContinue
+    $env:CUSTOM_RULE = $rule
+    $base = @("script", "script/TapeOutCircuit.s.sol", "--rpc-url", $Rpc, "--sender", $controller)
+    Invoke-Simulation "simulate tapeout custom $rule" $base | Out-Null
+    $text = (Invoke-Tool "forge" ($base + @("--unlocked", "--broadcast", "--slow"))) -join "`n"
+    Remove-Item Env:CUSTOM_RULE
+    $m = [regex]::Match($text, "circuit id: (\d+)")
+    if (-not $m.Success) { throw "no circuit id for the custom rule" }
+    $customId = $m.Groups[1].Value
+    $g = Get-BroadcastGas "TapeOutCircuit.s.sol"
+    Add-Gas "tapeout custom $rule ($ruleGates NAND, circuit $customId)" $g.gas "anvil receipt"
+    $netlistHash = ("" + (Invoke-Cast keccak $nlHex)).Trim()
+    $specText = Get-Content "../circuits/custom/build/$rule.spec.txt" -Raw
+    $specHex = "0x" + (([System.Text.Encoding]::UTF8.GetBytes($specText) | ForEach-Object { $_.ToString("x2") }) -join "")
+    $specHash = ("" + (Invoke-Cast keccak $specHex)).Trim()
+    Send-Tx "attachCustomRule ($rule)" $controller $escrow "attachCustomRule(address,uint256,bytes32,bytes32,string)" $circuits $customId $netlistHash $specHash "Everyone: day <=10 USDT0" | Out-Null
+    Assert-Equal (Read-Uint $escrow "circuitCount()(uint256)") 5 "five circuits attached (four official + one custom)"
+    Assert-Equal (Read-Uint $escrow "customRuleCount()(uint256)") 1 "one custom rule"
+    $report.demo.customRule = [ordered]@{ slug = $rule; circuitId = $customId; gates = $ruleGates; netlistHash = $netlistHash; specHash = $specHash }
+
+    $now = Read-Uint $escrow "today()(uint32)"
+    Invoke-Cast rpc evm_increaseTime 86400 --rpc-url $Rpc | Out-Null   # anvil only: move to the next UTC day
+    Invoke-Cast rpc evm_mine --rpc-url $Rpc | Out-Null
+    Assert-Equal (Read-Uint $escrow "today()(uint32)") ($now + 1) "next UTC day"
+    $r10 = Send-Tx "proposePayment 10 (allowed, 5 circuits)" $controller $escrow "proposePayment(address,uint256,string)" $payee 10000000 "demo: 10, at the custom limit"
+    Assert-Equal (Get-Bal $Usdt0 $payee) 40000000 "10 allowed: payee now holds 40 USDT0"
+    $r1 = Send-Tx "proposePayment 1 (blocked by the custom rule)" $controller $escrow "proposePayment(address,uint256,string)" $payee 1000000 "demo: 1 more, over the custom limit"
+    Assert-Equal (Get-Bal $Usdt0 $payee) 40000000 "1 blocked: no funds moved"
+    foreach ($pair in @(@("custom allowed 10", $r10.transactionHash), @("custom blocked 1", $r1.transactionHash))) {
+        $out = Invoke-Tool "node" @("../frontend/scripts/reevaluate.mjs", $pair[1], $Rpc)
+        $out | Select-Object -First 7 | ForEach-Object { Write-Host "      $_" }
+        if (($out -join "`n") -notmatch "Re-evaluation matches the record") { throw "re-evaluation of $($pair[0]) failed" }
+        Write-Host "  ok  re-evaluation of $($pair[0]) ($($pair[1]))"
+        $report.demo[$pair[0]] = [ordered]@{ tx = $pair[1]; reevaluation = ($out | Select-Object -First 7) }
+    }
+    $t1 = ($report.demo["custom blocked 1"].reevaluation) -join "`n"
+    if ($t1 -notmatch "Custom rule: DENY" -or $t1 -match "(Daily Cap|Whitelist|Confirmation|Freeze)[^\n]*: DENY") {
+        throw "the 1 USDT0 decision was not blocked by the custom rule alone"
+    }
+    Write-Host "  ok  1 USDT0 was blocked by the custom rule alone (the official four allowed)"
+
+    # --- 7. loosening delay: raising the daily cap reverts, then works after queue + ruleDelay + apply
+    Write-Host "7. loosening delay"
+    $delayed = $false
+    try { Invoke-Tool "cast" @("call", $escrow, "setDailyCap(uint256)", "100000000", "--from", $controller, "--rpc-url", $Rpc) | Out-Null }
+    catch { $delayed = $true }
+    Assert-Equal $delayed $true "raising the daily cap directly is refused (LooseningIsDelayed)"
+    Send-Tx "queueChange DAILY_CAP 100" $controller $escrow "queueChange(uint8,address,uint256)" 0 "0x0000000000000000000000000000000000000000" 100000000 | Out-Null
+    $changeId = Read-Uint $escrow "changeCount()(uint256)"
+    $early = $false
+    try { Invoke-Tool "cast" @("call", $escrow, "applyChange(uint256)", "$changeId", "--from", $controller, "--rpc-url", $Rpc) | Out-Null }
+    catch { $early = $true }
+    Assert-Equal $early $true "applying before the delay is refused"
+    $delay = Read-Uint $escrow "ruleDelay()(uint256)"
+    Invoke-Cast rpc evm_increaseTime ([int]$delay + 60) --rpc-url $Rpc | Out-Null   # anvil only
+    Invoke-Cast rpc evm_mine --rpc-url $Rpc | Out-Null
+    Send-Tx "applyChange (after $delay s)" $controller $escrow "applyChange(uint256)" $changeId | Out-Null
+    Assert-Equal (Read-Uint $escrow "dailyCap()(uint256)") 100000000 "daily cap is 100 USDT0 after the delay"
 
     $report.passed = $true
     Write-Host "Dry run passed on the local anvil fork (block $forkBlock). Nothing was sent to X Layer."

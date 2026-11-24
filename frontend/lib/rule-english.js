@@ -94,7 +94,7 @@ export function describeRule(rule) {
   if (facts.has('checkin_age_hours')) notes.push('Check in from the Rules tab to restart the check-in clock.');
   if (r.appliesTo.includes('beneficiary')) notes.push('A beneficiary must also be named on the Rules tab; naming one waits like any loosening change.');
   const others = Object.keys(ROLES).filter((p) => !r.appliesTo.includes(p));
-  if (others.length) notes.push(`This rule does not limit ${listText(others.map((p) => WHO[p]))}. Your other rules still apply to everyone.`);
+  if (others.length) notes.push(`This rule does not limit ${listText(others.map((p) => WHO[p]), 'or')}. Your other rules still apply to everyone.`);
   notes.push('This rule only adds limits. It can never allow a payment that another rule blocks.');
   return { who, sentence, groups, notes };
 }

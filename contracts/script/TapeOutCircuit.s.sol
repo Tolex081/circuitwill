@@ -20,16 +20,26 @@ interface ITransistorsBalance {
 ///      the netlist has elements, and sends TAPEOUT_FEE() in OKB (0.0013 OKB at the time).
 ///
 ///      CIRCUIT is one of: daily-cap (96 in, 447 NAND), payee-whitelist (97 in, 237 NAND),
-///      confirmation (65 in, 160 NAND), freeze (1 in, 1 NAND).
+///      confirmation (65 in, 160 NAND), freeze (1 in, 1 NAND). Or set CUSTOM_RULE=<slug> (instead of CIRCUIT) for an
+///      example custom rule from circuits/custom/build (256 in); attach it with `attachCustomRule`.
 ///
 ///      TAPEOUT_CIRCUITS=<circuits address> CIRCUIT=payee-whitelist forge script script/TapeOutCircuit.s.sol \
 ///        --rpc-url xlayer --account <keystore>            (add --broadcast only to spend real funds)
 contract TapeOutCircuit is Script {
     function run() external returns (uint256 id) {
         ITapeOutWriteAny circuits = ITapeOutWriteAny(vm.envAddress("TAPEOUT_CIRCUITS"));
-        string memory slug = vm.envString("CIRCUIT");
-        uint32 nIn = _nIn(slug);
-        string memory path = string.concat("../circuits/", slug, "/build/", slug, ".netlist.hex");
+        // CUSTOM_RULE=<slug> tapes out circuits/custom/build/<slug>.netlist.hex (256 inputs, the custom facts layout).
+        string memory slug = vm.envOr("CUSTOM_RULE", string(""));
+        uint32 nIn;
+        string memory path;
+        if (bytes(slug).length != 0) {
+            nIn = 256;
+            path = string.concat("../circuits/custom/build/", slug, ".netlist.hex");
+        } else {
+            slug = vm.envString("CIRCUIT");
+            nIn = _nIn(slug);
+            path = string.concat("../circuits/", slug, "/build/", slug, ".netlist.hex");
+        }
         bytes memory nl = vm.parseBytes(vm.trim(vm.readFile(path)));
         uint256 gates = nl.length / 7;
 

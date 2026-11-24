@@ -4,10 +4,10 @@
 or website exists on mainnet for CircuitWill. Every step was rehearsed on a local anvil fork of the latest mainnet
 block (see [Dry run](#dry-run-2026-11-20)); you broadcast each step yourself, from your own Foundry keystore.
 
-> **Re-run the dry run before mainnet.** On 2026-11-23 the escrow gained custom rules (`attachCustomRule`) and the
-> loosening delay (`queueChange` / `applyChange`, 24 h by default). The gas figures and the dry-run result below were
-> measured on the earlier contract and have not been re-measured. The steps themselves are unchanged, except for the
-> larger NAND supply cap in step 1.
+> **Re-measured on 2026-11-24.** On 2026-11-23 the escrow gained custom rules (`attachCustomRule`) and the
+> loosening delay (`queueChange` / `applyChange`, 24 h by default). The dry run was re-run on that contract
+> ([Dry run 2026-11-24](#dry-run-2026-11-24-custom-rules-and-the-delay)) and passed; the cost estimate below uses
+> its figures. The steps themselves are unchanged, except for the larger NAND supply cap in step 1.
 
 Rules for every step:
 
@@ -409,8 +409,9 @@ section 2.4 accepts as input), and give the read-only check:
 
 ## Cost estimate
 
-Measured on the [dry run](#dry-run-2026-11-20) (anvil receipts, fork of block 76,403,789) and read live from
-`https://rpc.xlayer.tech` on 2026-11-20 (block ≈ 76,403,000):
+Gas measured on the [dry run of 2026-11-24](#dry-run-2026-11-24-custom-rules-and-the-delay) (anvil receipts, fork of
+block 76,708,316, the contract with custom rules and the delay). Prices read live from `https://rpc.xlayer.tech` on
+2026-11-20 (block ≈ 76,403,000); `eth_gasPrice` was still 20,000,001 wei on 2026-11-24:
 
 - **Gas price:** `eth_gasPrice` = 20,000,001 wei. The base fee was 20,000,000 wei (0.02 gwei) in all of the last
   1,025 blocks (`eth_feeHistory`), and `eth_maxPriorityFeePerGas` = 1 wei. The busiest block used 24% of the
@@ -423,39 +424,60 @@ Measured on the [dry run](#dry-run-2026-11-20) (anvil receipts, fork of block 76
 | Step | Gas (anvil receipt) |
 |---|---|
 | BEM approve factory | 46,393 |
-| createCPU | 686,589 |
+| createCPU | 686,601 |
 | BEM approve transistors | 46,393 |
 | mint 845 NAND | 171,411 |
 | tapeout Daily Cap / Whitelist / Confirmation / Freeze | 1,511,368 + 878,655 + 659,569 + 204,815 = 3,254,407 |
-| Deploy.s.sol (13 transactions) | 4,796,120 |
+| Deploy.s.sol (13 transactions) | 7,101,282 |
 | fund (USDT0 transfer) | 56,112 |
-| 2 × confirmPayment | 2 × 51,718 = 103,436 |
-| proposePayment 60, blocked | 2,247,734 |
-| proposePayment 30, allowed | 2,315,901 |
-| **Total** | **13,724,496** |
+| 2 × confirmPayment | 2 × 51,877 = 103,754 |
+| proposePayment 60, blocked | 2,259,607 |
+| proposePayment 30, allowed | 2,359,635 |
+| **Total** | **16,085,595** |
 
 Arithmetic:
 
 ```
-setup      46,393 + 686,589 + 46,393 + 171,411           =    950,786 gas
+setup      46,393 + 686,601 + 46,393 + 171,411           =    950,798 gas
 tapeouts   1,511,368 + 878,655 + 659,569 + 204,815       =  3,254,407 gas
-deploy                                                    =  4,796,120 gas
-demo       56,112 + 103,436 + 2,247,734 + 2,315,901       =  4,723,183 gas
-total                                                     = 13,724,496 gas
+deploy                                                    =  7,101,282 gas
+demo       56,112 + 103,754 + 2,259,607 + 2,359,635       =  4,779,108 gas
+total                                                     = 16,085,595 gas
 
-gas cost   13,724,496 gas × 20,000,001 wei                = 274,489,933,724,496 wei ≈ 0.000274 OKB
+gas cost   16,085,595 gas × 20,000,001 wei                = 321,711,916,085,595 wei ≈ 0.000322 OKB
 tapeouts   4 × 0.0013 OKB                                 = 0.0052 OKB
-OKB total  0.000274 + 0.0052                              ≈ 0.0055 OKB
-  at 10× today's gas price (0.2 gwei): 0.00274 + 0.0052   ≈ 0.0080 OKB
+OKB total  0.000322 + 0.0052                              ≈ 0.0055 OKB
+  at 10× today's gas price (0.2 gwei): 0.00322 + 0.0052   ≈ 0.0084 OKB
 
 BEM total  0.1 (createCPU) + 0.01 (one mint call)         = 0.11 BEM  (11,000,000 base units)
 USDT0      60 funded; 30 moves to your own payee, 30 stays in the escrow; none is a fee
 ```
 
-The tapeout fee is 95% of the OKB cost. Keep **at least 0.01 OKB** for the forge simulations' 130% gas margin,
-wallet-side `maxFeePerGas` headroom and a retry. Each later payment with four circuits costs about 2.25M to 2.32M gas,
-≈ 0.000046 OKB at 0.02 gwei. Fiat prices were not looked up. The optional verification and re-evaluation steps are
+The tapeout fee is 94% of the OKB cost. Keep **at least 0.01 OKB** for the forge simulations' 130% gas margin,
+wallet-side `maxFeePerGas` headroom and a retry. Each later payment with four circuits costs about 2.26M to 2.36M gas,
+≈ 0.000047 OKB at 0.02 gwei. Each custom rule adds about 0.24M gas per payment (84-NAND rule; see the
+2026-11-24 dry run), and publishing one costs about 0.79M gas + 0.0013 OKB + 0.01 BEM. Fiat prices were not looked up. The optional verification and re-evaluation steps are
 free; DeWEB hosting is not included (see step 10).
+
+## Dry run (2026-11-24): custom rules and the delay
+
+Same script, same commands as below, on the contract with custom rules and the loosening delay. It now also runs
+step 6 (a custom rule) and step 7 (the delay). **Result: passed** (fork of block 76,708,316, no pin).
+
+- **Drift:** none. Factory and beacon implementations, `deployFee`, `protocolFee` and `TAPEOUT_FEE` match the
+  values in step 0.
+- **Steps 1 to 5:** the same as on 2026-11-20 (blocked 60 by the Daily Cap alone, allowed 30, both re-evaluated,
+  BEM mint fee per call). `Deploy.s.sol` now uses 7,101,282 gas (was 4,796,120), because the escrow is larger;
+  forge estimated 9,356,846 without `--broadcast`.
+- **Custom rule ("Up to 10 a day", `circuits/custom/build/daily-10`, 84 NAND):** BEM approve 46,393, mint 84 NAND
+  83,099, tapeout 445,843 (`TapeOutCircuit.s.sol` with `CUSTOM_RULE=daily-10`, circuit id 5), `attachCustomRule`
+  218,588. Total 793,923 gas, plus 0.0013 OKB tapeout fee and 0.01 BEM. Five circuits attached.
+- **Next UTC day (anvil `evm_increaseTime`):** 10 USDT0 allowed (2,601,830 gas with five circuits); 1 USDT0 more
+  blocked by the custom rule alone (2,571,414 gas), the four official circuits all allowed. Both decisions re-evaluated
+  with `reevaluate.mjs`: "Re-evaluation matches the record".
+- **Loosening delay:** `setDailyCap(100)` reverted with `LooseningIsDelayed`. `queueChange(DAILY_CAP, 0, 100)` used
+  121,600 gas; `applyChange` before the delay reverted with `ChangeNotReady`; after 24 hours it applied (41,064 gas)
+  and the cap read 100 USDT0.
 
 ## Dry run (2026-11-20)
 
