@@ -1,0 +1,3 @@
+# Keep LF line endings on every OS. Solidity metadata hashes the source bytes, so CRLF checkouts on Windows
+# would change the compiled bytecode.
+* text=auto eol=lf

@@ -159,7 +159,9 @@ contract CustomRuleTest is Base {
         vm.startPrank(owner);
         // The circuit id must be the one the owner previewed.
         vm.expectRevert(
-            abi.encodeWithSelector(CircuitWillEscrow.NetlistHashMismatch.selector, nh, keccak256(customNetlist("daily-10")))
+            abi.encodeWithSelector(
+                CircuitWillEscrow.NetlistHashMismatch.selector, nh, keccak256(customNetlist("daily-10"))
+            )
         );
         escrow.attachCustomRule(address(processor), daily10Id, nh, sh, 2, "");
         // Official circuits do not have the facts pinout.
@@ -175,7 +177,9 @@ contract CustomRuleTest is Base {
         vm.expectRevert(CircuitWillEscrow.RuleTextTooLong.selector);
         escrow.attachCustomRule(address(processor), sonId, nh, sh, 2, string(new bytes(281)));
         vm.expectRevert(
-            abi.encodeWithSelector(CircuitWillEscrow.UnsupportedCircuitKind.selector, CircuitWillEscrow.CircuitKind.CUSTOM)
+            abi.encodeWithSelector(
+                CircuitWillEscrow.UnsupportedCircuitKind.selector, CircuitWillEscrow.CircuitKind.CUSTOM
+            )
         );
         escrow.attachCircuit(CircuitWillEscrow.CircuitKind.CUSTOM, address(processor), sonId);
         vm.stopPrank();
@@ -206,7 +210,9 @@ contract CustomRuleTest is Base {
         attach("agent-50-5-trusted", agent50Id);
         vm.prank(owner);
         vm.expectRevert(CircuitWillEscrow.TooManyCustomRules.selector);
-        escrow.attachCustomRule(address(processor), weekId, keccak256(customNetlist("week-200-48h")), specHash("week-200-48h"), 7, "");
+        escrow.attachCustomRule(
+            address(processor), weekId, keccak256(customNetlist("week-200-48h")), specHash("week-200-48h"), 7, ""
+        );
     }
 
     // ================================================================ facts
@@ -229,7 +235,8 @@ contract CustomRuleTest is Base {
 
         // The owner's withdrawal: role 0, withdrawal flag set.
         (, got) = escrow.customFactsFor(owner, owner, 1, true);
-        uint256[15] memory w = [uint256(1), 301, 302, 302, (1_000 * USDT - 3 * USDT - 2) / 10_000, 2, slot, 0, 0, 0, 0, 5, 0, 0, 1];
+        uint256[15] memory w =
+            [uint256(1), 301, 302, 302, (1_000 * USDT - 3 * USDT - 2) / 10_000, 2, slot, 0, 0, 0, 0, 5, 0, 0, 1];
         assertEq(got, packFactsRef(w));
     }
 
