@@ -1,4 +1,4 @@
-// Payment preview: the packing must match the escrow's packing libraries and the README pinouts bit for bit, the time
+// Payment preview: the packing must match the escrow's packing libraries and the pinouts in docs/TECHNICAL.md bit for bit, the time
 // rules must match CircuitWillEscrow (UTC day rollover, whole hours of payee age), and simulate() must give the
 // circuits' answers on the real netlists.
 import { test } from 'node:test';
@@ -37,7 +37,7 @@ const T0 = 20_400n * DAY + 10n * 3600n; // 10:00 UTC on some day
 
 /// Pin i of the circuit is bit (i & 7) of byte (i >> 3) (TAP-02, LSB-first).
 const pin = (bytes, i) => (bytes[i >> 3] >> (i & 7)) & 1;
-/// Reads a field back from the pins it occupies in the README pinout tables.
+/// Reads a field back from the pins it occupies in the pinout tables of docs/TECHNICAL.md.
 const readPins = (bytes, from, width) => {
   let v = 0n;
   for (let b = 0; b < width; b++) v |= BigInt(pin(bytes, from + b)) << BigInt(b);
@@ -54,9 +54,9 @@ function rng(seed) {
   };
 }
 
-// ------------------------------------------------------------------ packing vs README pinouts and reference packers
+// ------------------------------------------------------------------ packing vs documented pinouts and reference packers
 
-test('Daily Cap packing: README pins 0-31 amount, 32-63 spent today, 64-95 daily limit; same bytes as the circuit builder', () => {
+test('Daily Cap packing: pins 0-31 amount, 32-63 spent today, 64-95 daily limit; same bytes as the circuit builder', () => {
   const r = rng(1);
   for (let n = 0; n < 200; n++) {
     const [a, s, c] = [r(MAX32), r(MAX32), r(MAX32)];
@@ -74,7 +74,7 @@ test('Daily Cap packing: README pins 0-31 amount, 32-63 spent today, 64-95 daily
   assert.equal(packDailyCap(0n, 0n, MAX32 + 1n), null);
 });
 
-test('Payee Whitelist packing: README pins 0 trusted, 1-16 age, 17-48 amount, 49-80 new-recipient limit, 81-96 waiting time', () => {
+test('Payee Whitelist packing: pins 0 trusted, 1-16 age, 17-48 amount, 49-80 new-recipient limit, 81-96 waiting time', () => {
   const r = rng(2);
   for (let n = 0; n < 200; n++) {
     const saved = r(1n) === 1n;
@@ -95,7 +95,7 @@ test('Payee Whitelist packing: README pins 0 trusted, 1-16 age, 17-48 amount, 49
   assert.equal(packPayeeWhitelist(false, 0n, 0n, 0n, MAX16 + 1n), null);
 });
 
-test('Confirmation packing: README pins 0-31 amount, 32-63 threshold, 64 confirmed; Freeze: one byte', () => {
+test('Confirmation packing: pins 0-31 amount, 32-63 threshold, 64 confirmed; Freeze: one byte', () => {
   const r = rng(3);
   for (let n = 0; n < 200; n++) {
     const [a, t, ok] = [r(MAX32), r(MAX32), r(1n) === 1n];
@@ -229,7 +229,7 @@ test('simulate: over the daily limit, a new recipient, the approval rule alone, 
   assert.equal(fv.approveOnly, false);
 });
 
-test('simulate: the circuits agree with each README formula on many random contexts', () => {
+test('simulate: the circuits agree with each documented formula on many random contexts', () => {
   const r = rng(196);
   for (let n = 0; n < 150; n++) {
     const raw = {

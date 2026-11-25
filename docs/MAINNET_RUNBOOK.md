@@ -312,7 +312,7 @@ cast send $Escrow "proposePayment(address,uint256,string)" $Payee 60000000 "demo
 
 The transaction **succeeds** (status 1), moves no funds, and records decision #1 as `BLOCKED (CIRCUIT_DENIED)`: Daily
 Cap DENY, Whitelist, Confirmation and Freeze ALLOW. `cast` uses `eth_estimateGas` (about 2.4M), which is enough;
-see the README, "Gas estimation works". Copy the `transactionHash` as `$TxBlocked`.
+see docs/TECHNICAL.md, "Gas estimation works". Copy the `transactionHash` as `$TxBlocked`.
 
 **Allowed: 30 USDT0**
 
@@ -361,7 +361,7 @@ cast send $Escrow "withdraw(address,uint256)" $Me 30000000 --account $Account --
 | Test transactions | `$TxBlocked`, `$TxAllowed` (step 8), plus their re-evaluation output |
 | DeWEB link | step 10, if publishing works on X Layer |
 
-Add them to the README's "Deployment configuration" section and change its status line. Until then, the README
+Add them to the "Deployment configuration" section of docs/TECHNICAL.md and update the README's status line. Until then, the README
 correctly says nothing is deployed.
 
 ## 10. Host the dashboard on DeWEB

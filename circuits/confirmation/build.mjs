@@ -1,4 +1,4 @@
-// Confirmation Threshold circuit (CircuitWill_Circuit_Pinouts.md, section 3).
+// Confirmation Threshold circuit (docs/SPEC.md, circuit pinouts section 3).
 //
 // Pinout (nIn = 65, nOut = 1), bit-packed LSB-first:
 //   inputs  0..31  amount     (uint32, token base units)

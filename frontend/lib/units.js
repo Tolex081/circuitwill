@@ -69,7 +69,7 @@ export function leToBigInt(hex) {
   return v;
 }
 
-/// Decodes a recorded circuit input into its fields (README "Event and re-evaluation format", step 5).
+/// Decodes a recorded circuit input into its fields (docs/TECHNICAL.md "Event and re-evaluation format", step 5).
 export function decodeCircuitInput(kind, hex) {
   const h = String(hex).replace(/^0x/, '');
   const bytes = h.length / 2;
