@@ -1,4 +1,4 @@
-// Independent re-evaluation of a recorded CircuitWill decision (README "To re-evaluate a decision").
+// Independent re-evaluation of a recorded CircuitWill decision (docs/TECHNICAL.md "To re-evaluate a decision").
 //
 // Read-only: it only reads the transaction receipt and calls view functions (TapeOut eval / netlist / circuitInfo and
 // the escrow's decisionRecordHash). It cannot change anything, and its result is informational: the decision recorded

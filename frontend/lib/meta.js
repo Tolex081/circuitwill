@@ -1,4 +1,4 @@
-// Enum values of CircuitWillEscrow (README "Event and re-evaluation format"). They are part of the event format.
+// Enum values of CircuitWillEscrow (docs/TECHNICAL.md "Event and re-evaluation format"). They are part of the event format.
 
 export const KIND = { NONE: 0, DAILY_CAP: 1, WHITELIST: 2, CONFIRMATION: 3, FREEZE: 4, CUSTOM: 5 };
 export const KIND_NAME = ['NONE', 'DAILY_CAP', 'WHITELIST', 'CONFIRMATION', 'FREEZE', 'CUSTOM'];

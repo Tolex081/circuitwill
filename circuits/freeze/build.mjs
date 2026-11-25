@@ -1,4 +1,4 @@
-// Freeze / Breaker circuit (CircuitWill_Circuit_Pinouts.md, section 4).
+// Freeze / Breaker circuit (docs/SPEC.md, circuit pinouts section 4).
 //
 // Pinout (nIn = 1, nOut = 1):
 //   input  0  freeze_flag  (1 = frozen)

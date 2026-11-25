@@ -24,7 +24,7 @@ the "To" field. This design adds:
 
 ## 2. What does not change
 
-These rules from PRD section 7 and the README's Walrus Memory section stay as they are:
+These rules from PRD section 7 and the Walrus Memory section of TECHNICAL.md stay as they are:
 
 - Circuits make every payment decision. Nothing in this design is a circuit input.
 - Memory is optional and off by default. With memory off the product works exactly as today. Rule suggestions that

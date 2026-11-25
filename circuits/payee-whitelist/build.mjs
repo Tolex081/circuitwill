@@ -1,4 +1,4 @@
-// Payee Whitelist + Cooling-off circuit (CircuitWill_Circuit_Pinouts.md, section 2).
+// Payee Whitelist + Cooling-off circuit (docs/SPEC.md, circuit pinouts section 2).
 //
 // Pinout (nIn = 97, nOut = 1), bit-packed LSB-first:
 //   input  0       is_saved           (1 = saved payee)

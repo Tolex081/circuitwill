@@ -1,4 +1,4 @@
-// Daily Cap circuit (CircuitWill_Circuit_Pinouts.md, section 1).
+// Daily Cap circuit (docs/SPEC.md, circuit pinouts section 1).
 //
 // Pinout (nIn = 96, nOut = 1), bit-packed LSB-first:
 //   inputs  0..31  amount       (uint32, token base units)
