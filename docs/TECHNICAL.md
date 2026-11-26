@@ -34,7 +34,7 @@ circuits/                         Node (no dependencies): netlist generators + r
   test/*.test.mjs                 edge values, bit sweeps, exhaustive small widths, 20k random vectors per circuit
 contracts/                        Foundry
   src/CircuitWillEscrow.sol       escrow: circuit-gated payments and withdrawals, rule parameters, decision log
-  src/CircuitWillKey.sol          non-burnable ERC-721 controller NFT
+  src/CircuitWillKey.sol          non-burnable ERC-721 controller NFT, with on-chain SVG metadata
   src/interfaces/ITapeOut.sol     TapeOut functions used (eval, circuitInfo, netlist, isCPU)
   src/libraries/TapeOutEval.sol   fail-closed eval adapter (the only code that calls TapeOut eval)
   src/libraries/*Packing.sol      one input packer per circuit, with range checks (reject, never truncate)
@@ -107,6 +107,11 @@ _execute: assign decisionId → reset spentToday if the UTC day changed
 - **Control follows the NFT.** The escrow stores `controllerNft` and `controllerTokenId` and never holds the NFT.
   Management and `withdraw` require `controllerNft.ownerOf(controllerTokenId) == msg.sender`. When the NFT moves to a
   new wallet, the new holder takes control and the old one loses it.
+- **The key shows up in wallets.** `CircuitWillKey.tokenURI` returns fully on-chain metadata (a base64 JSON data
+  URI with an SVG image, no IPFS or server). The card shows the gate mark, "CircuitWill Key #<id>", the four rule
+  colours and the warning "Whoever holds this key controls a CircuitWill. Transfer it only to hand over control."
+  The description says the same in full. The key is minted before its escrow exists, so the image does not show the
+  will's address. The art cannot be changed after deployment.
 - **Agent key.** `setAgent` records who appointed the agent (`agentSetBy`). The agent is active only while that
   address still owns the NFT, so an NFT transfer disables the previous owner's agent. The agent can only call
   `proposePayment`.
