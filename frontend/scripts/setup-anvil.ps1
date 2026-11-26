@@ -134,6 +134,12 @@ try {
     # --- 2. Tape out each circuit with the real script
     $ids = [ordered]@{}
     $env:TAPEOUT_CIRCUITS = $circuits
+    # Each setup targets a fresh fork. A run cut short (anvil stopped mid-tapeout) leaves a record with "unfinished
+    # operations" (forge 1.9 keeps a recovery journal next to the cached record), and forge then refuses every later
+    # broadcast of this script. Drop this script's rehearsal records only (never broadcast/ or cache/).
+    foreach ($dir in @("broadcast-rehearsal", "cache-rehearsal")) {
+        Remove-Item -Recurse -Force "$dir/TapeOutCircuit.s.sol/196" -ErrorAction SilentlyContinue
+    }
     foreach ($s in $slugs) {
         $env:CIRCUIT = $s
         $out = Invoke-Tool "forge" @("script", "script/TapeOutCircuit.s.sol", "--rpc-url", $Rpc, "--sender", $designer, "--unlocked", "--broadcast", "--slow")

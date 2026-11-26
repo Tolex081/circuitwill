@@ -141,8 +141,18 @@ const FRIENDLY_REVERT = {
   ZeroHash: 'That payment could not be identified.',
 };
 
+/// Plain reasons for revert strings from contracts the escrow calls (TapeOut processors).
+const FRIENDLY_REASON = {
+  'no circuit': 'That rule circuit doesn’t exist on this network (the TapeOut processor has no circuit with that id).',
+};
+
 function errorText(e) {
   const revert = e?.revert ?? e?.info?.error?.data?.revert;
+  // A plain require/revert("…") comes back as Error(string): show its message, not the word "Error".
+  if (revert?.name === 'Error' && typeof revert.args?.[0] === 'string') {
+    const msg = revert.args[0];
+    return FRIENDLY_REASON[msg] ?? `The contract refused this: ${msg}.`;
+  }
   if (revert?.name) return FRIENDLY_REVERT[revert.name] ?? `The contract refused this (${revert.name}).`;
   if (e?.code === 'ACTION_REJECTED') return 'You cancelled the request in your wallet.';
   if (e?.code === 'INSUFFICIENT_FUNDS') return "Your wallet doesn't have enough OKB to pay the network fee.";
@@ -807,6 +817,39 @@ function renderReview() {
   if (!circuitSource()) $('create-advanced').open = true;
 }
 
+/// Input count per rule kind (CircuitWillEscrow._expectedNIn). Every rule circuit has nOut = 1 and nState = 0.
+const EXPECTED_NIN = { [KIND.DAILY_CAP]: 96, [KIND.WHITELIST]: 97, [KIND.CONFIRMATION]: 65, [KIND.FREEZE]: 1 };
+
+/// Runs attachCircuit's own checks as free view calls before the wizard sends anything, so a missing or wrong circuit
+/// stops it before the key and the CircuitWill are created. Throws a readable error naming the rule.
+async function checkRuleCircuits(plan, factory) {
+  const attaches = plan.filter(([, method]) => method === 'attachCircuit');
+  if (!attaches.length) return;
+  await ensureRead();
+  const processor = attaches[0][2][1];
+  const fix = state.isAnvil
+    ? ' On the local test network this usually means anvil was restarted: run frontend/scripts/setup-anvil.ps1 again, then reload this page.'
+    : ' Check the processor and circuit ids under "Advanced: token and circuits".';
+  if ((await state.read.getCode(processor)) === '0x') throw new Error(`The rule circuits contract ${short(processor)} doesn’t exist on this network.${fix}`);
+  if (factory !== ethers.ZeroAddress) {
+    const f = new ethers.Contract(factory, ['function isCPU(address) view returns (bool)'], state.read);
+    if (!(await f.isCPU(processor).catch(() => false))) throw new Error(`${short(processor)} isn’t a TapeOut circuits contract registered with the factory.${fix}`);
+  }
+  const proc = new ethers.Contract(processor, NETLIST_ABI, state.read);
+  for (const [, , [kind, , id]] of attaches) {
+    const name = RULE[kind]?.name ?? 'A rule';
+    let info;
+    try {
+      info = await proc.circuitInfo(id);
+    } catch {
+      throw new Error(`${name}: circuit ${id} doesn’t exist on this network.${fix}`);
+    }
+    if (Number(info.nIn) !== EXPECTED_NIN[kind] || Number(info.nOut) !== 1 || Number(info.nState) !== 0) {
+      throw new Error(`${name}: circuit ${id} isn’t a ${name} circuit (it has ${info.nIn} inputs, ${info.nOut} outputs).${fix}`);
+    }
+  }
+}
+
 async function createWill() {
   requireSigner();
   show('create-error', false);
@@ -825,6 +868,7 @@ async function createWill() {
   const keyText = $('c-key').value.trim();
   const existingKey = keyText ? parseAddress(keyText, 'CircuitWillKey') : null;
   const plan = buildPlan(r, processor);
+  await checkRuleCircuits(plan, factory);
   if (!anyRule && !(await ask({ title: 'Create without rules?', body: 'With no rules turned on, every payment is blocked. You can turn rules on later.', ok: 'Create anyway' }))) return;
 
   const steps = $('create-steps');
