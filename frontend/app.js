@@ -390,6 +390,56 @@ async function ensureRead() {
   return state.read;
 }
 
+/// What a wallet needs to add X Layer mainnet when it doesn't know it yet (EIP-3085).
+const XLAYER_CHAIN = {
+  chainId: '0xc4',
+  chainName: 'X Layer Mainnet',
+  nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 },
+  rpcUrls: [DEFAULTS.rpc],
+  blockExplorerUrls: ['https://www.oklink.com/xlayer'],
+};
+
+const walletChain = async (eth) => BigInt(await eth.request({ method: 'eth_chainId' }));
+
+/// The error code a wallet gave, looking inside the wrappers some mobile wallets put around it.
+const walletErrCode = (e) => e?.code ?? e?.data?.originalError?.code ?? e?.error?.code;
+
+/// Some mobile wallets report the new chain a moment after the switch call returns.
+async function waitForWalletChain(eth) {
+  for (let i = 0; i < 6; i++) {
+    if ((await walletChain(eth)) === CHAIN_ID) return true;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return false;
+}
+
+/// Puts the wallet on X Layer: switches if the wallet knows X Layer, adds it first if it doesn't.
+async function ensureWalletOnXLayer(eth) {
+  if ((await walletChain(eth)) === CHAIN_ID) return;
+  const cancelled = () => new Error('You said no in your wallet. CircuitWill needs X Layer: tap Connect wallet again and approve the switch.');
+  try {
+    await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: XLAYER_CHAIN.chainId }] });
+  } catch (e) {
+    if (walletErrCode(e) === 4001) throw cancelled();
+    // 4902 means "unknown chain". Many mobile wallets return a generic error instead, so try adding X Layer either way.
+    try {
+      await eth.request({ method: 'wallet_addEthereumChain', params: [XLAYER_CHAIN] });
+    } catch (addErr) {
+      if (walletErrCode(addErr) === 4001) throw cancelled();
+      throw new Error("Your wallet couldn't add X Layer by itself. Add X Layer in your wallet's network list (chain 196), switch to it, then tap Connect wallet again.");
+    }
+    // Some wallets add the network without switching to it.
+    if (!(await waitForWalletChain(eth))) {
+      try {
+        await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: XLAYER_CHAIN.chainId }] });
+      } catch (e2) {
+        if (walletErrCode(e2) === 4001) throw cancelled();
+      }
+    }
+  }
+  if (!(await waitForWalletChain(eth))) throw new Error('Your wallet is still on another network. Switch it to X Layer, then tap Connect wallet again.');
+}
+
 async function connectInjected() {
   const eth = window.ethereum;
   if (!eth) {
@@ -401,16 +451,7 @@ async function connectInjected() {
   }
   await ensureRead();
   await eth.request({ method: 'eth_requestAccounts' });
-  let chainId = BigInt(await eth.request({ method: 'eth_chainId' }));
-  if (chainId !== CHAIN_ID) {
-    try {
-      await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0xc4' }] });
-    } catch {
-      throw new Error('Please switch your wallet to the X Layer network, then try again.');
-    }
-    chainId = BigInt(await eth.request({ method: 'eth_chainId' }));
-    if (chainId !== CHAIN_ID) throw new Error('Your wallet is not on X Layer (chain 196).');
-  }
+  await ensureWalletOnXLayer(eth);
   const bp = new ethers.BrowserProvider(eth, Number(CHAIN_ID));
   state.signer = await bp.getSigner();
   state.account = await state.signer.getAddress();
