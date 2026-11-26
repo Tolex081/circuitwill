@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "frontend/index.html"
+        ],
+        "createdAt": "2026-11-25T13:32:46.470Z",
+        "reason": "user confirmed on 2026-11-21: keep brand incl. the four per-rule colours (--k1 violet, --k2 teal, --k3 magenta, --k4 slate); line 363 uses those rule colours"
+      }
+    ]
+  }
+}
